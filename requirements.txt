@@ -1,0 +1,14 @@
+# 분석 전용. torch / OpenVLA / LIBERO 는 setup/*.sh 로 설치하세요.
+transformers==4.40.1
+tokenizers==0.19.1
+timm==0.9.10
+accelerate>=0.25.0
+einops
+numpy<2.0
+pandas
+scipy
+matplotlib
+pyyaml
+pytest
+Pillow
+huggingface_hub

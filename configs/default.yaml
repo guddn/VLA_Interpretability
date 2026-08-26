@@ -1,0 +1,36 @@
+# 실험 기본 설정
+model:
+  # setup/03_download_ckpt.py 의 CKPTS 와 맞춰 쓰세요.
+  path: "openvla/openvla-7b-finetuned-libero-spatial"
+  dtype: "bfloat16"
+  # !! 반드시 eager. flash_attention_2 / sdpa 는 output_attentions 를 무시합니다.
+  attn_implementation: "eager"
+  device: "cuda:0"
+  # LIBERO fine-tuned 체크포인트의 action un-normalization key
+  unnorm_key: "libero_spatial"
+
+tokens:
+  # 프롬프트 템플릿의 고정 문구를 L(언어 구간)에서 제외할지 여부.
+  # True 로 두는 것을 강력히 권장합니다. (계획서 Phase 1 주의 1)
+  instruction_only: true
+  # BOS / attention sink 후보를 별도 집합 S 로 분리
+  separate_sink: true
+  # sink 로 취급할 절대 위치 (BOS=0). 실측 후 조정하세요.
+  sink_positions: [0]
+
+metrics:
+  # 어느 층을 집계할지. null 이면 전체
+  layers: null
+  # head 별로 저장할지 (용량 커짐). False 면 head 평균만
+  per_head: true
+
+intervene:
+  # knockout 시 마스킹할 대상
+  targets: ["language", "vision"]
+  # ISS식 치환에 쓸 baseline: "other_instruction" | "shuffled" | "empty"
+  # "empty"(0벡터)는 OOD 라 권장하지 않습니다.
+  replacement_baseline: "other_instruction"
+
+run:
+  seed: 0
+  out_dir: "outputs"

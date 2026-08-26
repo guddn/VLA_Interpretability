@@ -1,0 +1,194 @@
+"""GPU/모델 없이 돌아가는 단위 테스트. 로직 실수를 여기서 잡습니다.
+
+    pytest -q tests/test_core.py
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+import pytest
+import torch
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from vlamod import metrics as M  # noqa: E402
+from vlamod import token_index as TI  # noqa: E402
+from vlamod.intervene import apply_block  # noqa: E402
+
+
+# ---------------------------------------------------------------- metrics
+def test_ratios_uniform_attention():
+    """균등 attention 이면 R_raw ≈ |L|/(|L|+|V|), R_norm ≈ 0.5 여야 한다."""
+    L, H, Q, T = 2, 3, 4, 20
+    attn = torch.full((L, H, Q, T), 1.0 / T)
+    vnorm = torch.ones(L, H, T)
+    visual = list(range(1, 17))   # 16개
+    language = list(range(17, 20))  # 3개
+    r = M.compute_ratios(attn, vnorm, visual, language, sink_idx=[0])
+
+    expected_raw = 3 / (3 + 16)
+    assert abs(float(r.r_raw.mean()) - expected_raw) < 1e-5
+    assert abs(float(r.r_norm.mean()) - 0.5) < 1e-5
+    assert abs(r.uniform_baseline - expected_raw) < 1e-9
+    # value-norm 이 전부 1이면 R_vnorm == R_raw
+    assert abs(float(r.r_vnorm.mean()) - expected_raw) < 1e-5
+
+
+def test_ratios_all_attention_on_language():
+    L, H, Q, T = 1, 1, 1, 10
+    attn = torch.zeros(L, H, Q, T)
+    attn[..., 8] = 0.5
+    attn[..., 9] = 0.5
+    vnorm = torch.ones(L, H, T)
+    r = M.compute_ratios(attn, vnorm, visual_idx=list(range(1, 8)), language_idx=[8, 9])
+    assert float(r.r_raw.mean()) == pytest.approx(1.0, abs=1e-6)
+    assert float(r.r_norm.mean()) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_value_norm_changes_ratio():
+    """언어 토큰의 value norm 이 크면 R_vnorm > R_raw 여야 한다."""
+    L, H, Q, T = 1, 1, 1, 6
+    attn = torch.full((L, H, Q, T), 1.0 / T)
+    vnorm = torch.ones(L, H, T)
+    vnorm[..., 4:] = 10.0            # 언어 토큰의 value 가 훨씬 큼
+    r = M.compute_ratios(attn, vnorm, visual_idx=[0, 1, 2, 3], language_idx=[4, 5])
+    assert float(r.r_vnorm.mean()) > float(r.r_raw.mean())
+
+
+def test_mass_decomposition_sums_to_one():
+    L, H, Q, T = 2, 2, 3, 12
+    attn = torch.softmax(torch.randn(L, H, Q, T), dim=-1)
+    vnorm = torch.rand(L, H, T) + 0.1
+    r = M.compute_ratios(attn, vnorm, visual_idx=list(range(1, 8)),
+                         language_idx=[8, 9], sink_idx=[0])
+    total = r.mass_v + r.mass_l + r.mass_sink + r.mass_other
+    assert torch.allclose(total, torch.ones_like(total), atol=1e-5)
+
+
+def test_kl_self_is_zero():
+    logits = torch.randn(7, 256)
+    assert float(M.action_kl(logits, logits)) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_kl_positive_and_asymmetric():
+    a = torch.randn(7, 256)
+    b = torch.randn(7, 256)
+    kl_ab = float(M.action_kl(a, b))
+    kl_ba = float(M.action_kl(b, a))
+    assert kl_ab > 0 and kl_ba > 0
+    assert kl_ab != pytest.approx(kl_ba, abs=1e-6)
+
+
+def test_causal_ratio():
+    assert M.causal_ratio(1.0, 1.0) == pytest.approx(0.5)
+    assert M.causal_ratio(0.0, 2.0) == pytest.approx(0.0)
+    assert M.causal_ratio(3.0, 1.0) == pytest.approx(0.75)
+
+
+# ------------------------------------------------------------- intervene
+def test_apply_block_masks_only_target_cells():
+    mask = torch.zeros(1, 1, 6, 6)
+    out = apply_block(mask, query_idx=[4, 5], key_idx=[1, 2])
+    neg = torch.finfo(out.dtype).min
+    assert out[0, 0, 4, 1] == neg and out[0, 0, 5, 2] == neg
+    assert out[0, 0, 3, 1] == 0.0        # 다른 query 행은 그대로
+    assert out[0, 0, 4, 3] == 0.0        # 다른 key 열은 그대로
+    assert mask.sum() == 0.0             # 원본 불변 (clone 확인)
+
+
+def test_apply_block_out_of_range_is_ignored():
+    mask = torch.zeros(1, 1, 4, 4)
+    out = apply_block(mask, query_idx=[99], key_idx=[1])
+    assert torch.equal(out, mask)
+
+
+def test_knockout_removes_mass_after_softmax():
+    """마스킹 후 softmax 하면 해당 열의 확률이 0이 되고 나머지가 재정규화되어야 한다."""
+    scores = torch.randn(1, 1, 5, 5)
+    masked = apply_block(torch.zeros(1, 1, 5, 5), query_idx=[4], key_idx=[0, 1])
+    p = torch.softmax(scores + masked, dim=-1)
+    assert p[0, 0, 4, 0] == pytest.approx(0.0, abs=1e-8)
+    assert p[0, 0, 4, 1] == pytest.approx(0.0, abs=1e-8)
+    assert float(p[0, 0, 4].sum()) == pytest.approx(1.0, abs=1e-5)
+
+
+# ------------------------------------------------------------ token_index
+def test_build_prompt_offsets_point_at_instruction():
+    prompt, (s, e) = TI.build_prompt("Pick up the Black Bowl.")
+    assert prompt[s:e] == "pick up the black bowl"
+    assert prompt.startswith("In: What action should the robot take to")
+    assert prompt.endswith("Out:")
+
+
+def test_build_prompt_lowercases_and_strips_period():
+    prompt, (s, e) = TI.build_prompt("  OPEN the drawer.  ")
+    assert prompt[s:e] == "open the drawer"
+
+
+class _FakeTokenizer:
+    """offset_mapping 을 주는 최소 토크나이저 (fast tokenizer 흉내)."""
+
+    vocab_size = 32000
+    bos_token = "<s>"
+    eos_token = "</s>"
+
+    def __init__(self, prompt: str):
+        self.prompt = prompt
+        # 공백 단위로 자르고 앞에 BOS 를 붙인다
+        self._offsets = [(0, 0)]
+        i = 0
+        for w in prompt.split(" "):
+            j = prompt.find(w, i)
+            self._offsets.append((j, j + len(w)))
+            i = j + len(w)
+
+    def __call__(self, text, return_offsets_mapping=False, add_special_tokens=True):
+        return {"offset_mapping": self._offsets}
+
+    def decode(self, ids, skip_special_tokens=False):
+        return f"<tok{ids[0]}>"
+
+
+class _FakeVLA:
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+
+
+def test_build_spans_separates_language_from_template():
+    instruction = "pick up the bowl"
+    prompt, char_span = TI.build_prompt(instruction)
+    tok = _FakeTokenizer(prompt)
+    n_text = len(tok._offsets)
+    ids = torch.arange(n_text)
+    vla = _FakeVLA(tok)
+
+    spans = TI.build_spans(
+        vla, prompt, char_span, ids,
+        visual_span=(1, 1 + 8),      # visual 8개가 index 1 에 삽입
+        n_action_tokens=7,
+        sink_positions=(0,),
+        instruction_only=True,
+    )
+    assert spans.n_visual == 8
+    assert spans.visual == list(range(1, 9))
+    assert len(spans.language) >= 3          # pick/up/the/bowl 중 최소 3개
+    assert len(spans.action) == 7
+    assert spans.action[0] == spans.n_total_prompt
+    # 언어와 템플릿이 겹치지 않아야 한다
+    assert not (set(spans.language) & set(spans.template))
+    # 언어 인덱스는 전부 visual 구간 뒤에 있어야 한다
+    assert min(spans.language) > spans.visual[-1]
+
+
+def test_build_spans_raises_when_language_empty():
+    prompt, _ = TI.build_prompt("pick up the bowl")
+    tok = _FakeTokenizer(prompt)
+    ids = torch.arange(len(tok._offsets))
+    with pytest.raises(RuntimeError):
+        TI.build_spans(
+            _FakeVLA(tok), prompt,
+            instr_char_span=(10**6, 10**6 + 1),   # 존재하지 않는 구간
+            input_ids=ids, visual_span=(1, 9),
+        )
