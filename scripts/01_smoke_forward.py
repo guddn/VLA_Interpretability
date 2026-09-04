@@ -25,6 +25,7 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from vlamod.device import apply_overrides, report_gpu  # noqa: E402
 from vlamod import capture as cap  # noqa: E402
 from vlamod import metrics as M  # noqa: E402
 from vlamod import token_index as TI  # noqa: E402
@@ -46,10 +47,16 @@ def main() -> int:
     ap.add_argument("--libero", action="store_true", help="LIBERO 관측으로 테스트")
     ap.add_argument("--suite", default="spatial")
     ap.add_argument("--task-id", type=int, default=0)
+    ap.add_argument("--gpu", type=int, default=None, metavar="N",
+                    help="사용할 GPU 번호 (예: --gpu 3). --device 와 동시 사용 불가")
+    ap.add_argument("--device", default=None,
+                    help='--gpu 대신 문자열로 지정. "cuda:3" / "3" / "cpu"')
+    ap.add_argument("--model", default=None, help="체크포인트 경로/HF repo. config 값을 덮어씀")
     args = ap.parse_args()
 
     cfg = yaml.safe_load(open(args.config, encoding="utf-8"))
     mcfg = cfg["model"]
+    apply_overrides(mcfg, args)
 
     print("=" * 70)
     print("[1] 모델 로딩")
@@ -59,6 +66,7 @@ def main() -> int:
         dtype=mcfg["dtype"],
         attn_implementation=mcfg["attn_implementation"],
     )
+    report_gpu(mcfg["device"])
     print(f"  path      : {vla.path}")
     print(f"  layers    : {vla.n_layers}, heads: {vla.n_heads}")
     print(f"  vocab_size: {vla.tokenizer.vocab_size}")

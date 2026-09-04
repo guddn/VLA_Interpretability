@@ -192,3 +192,90 @@ def test_build_spans_raises_when_language_empty():
             instr_char_span=(10**6, 10**6 + 1),   # 존재하지 않는 구간
             input_ids=ids, visual_span=(1, 9),
         )
+
+
+# ------------------------------------------------------------------ device
+from types import SimpleNamespace  # noqa: E402
+
+from vlamod.device import apply_overrides, device_index, normalize_device  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "given,expected",
+    [
+        (0, "cuda:0"), (3, "cuda:3"), ("3", "cuda:3"), ("cuda:3", "cuda:3"),
+        ("cuda", "cuda:0"), ("CUDA:2", "cuda:2"), ("cpu", "cpu"), ("-1", "cpu"),
+    ],
+)
+def test_normalize_device(given, expected):
+    assert normalize_device(given) == expected
+
+
+@pytest.mark.parametrize("bad", ["gpu3", "cuda:x", "", "foo"])
+def test_normalize_device_rejects_garbage(bad):
+    with pytest.raises(ValueError):
+        normalize_device(bad)
+
+
+def test_device_index():
+    assert device_index("cuda:5") == 5
+    assert device_index("cpu") is None
+
+
+def _cfg():
+    return {"path": "openvla/openvla-7b", "device": "cuda:0",
+            "dtype": "bfloat16", "unnorm_key": "libero_spatial"}
+
+
+def test_apply_overrides_gpu_flag(monkeypatch):
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    c = _cfg()
+    apply_overrides(c, SimpleNamespace(gpu=3, device=None, model=None, unnorm_key=None))
+    assert c["device"] == "cuda:3"
+    assert os.environ["MUJOCO_EGL_DEVICE_ID"] == "3"
+
+
+def test_apply_overrides_device_string(monkeypatch):
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    c = _cfg()
+    apply_overrides(c, SimpleNamespace(gpu=None, device="2", model=None, unnorm_key=None))
+    assert c["device"] == "cuda:2"
+
+
+def test_apply_overrides_rejects_both(monkeypatch):
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    with pytest.raises(SystemExit):
+        apply_overrides(_cfg(), SimpleNamespace(gpu=1, device="cuda:2", model=None, unnorm_key=None))
+
+
+def test_apply_overrides_model_and_unnorm(monkeypatch):
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    c = _cfg()
+    apply_overrides(c, SimpleNamespace(gpu=None, device=None,
+                                       model="openvla/openvla-7b-finetuned-libero-object",
+                                       unnorm_key="libero_object"))
+    assert c["path"].endswith("libero-object")
+    assert c["unnorm_key"] == "libero_object"
+
+
+def test_apply_overrides_ignores_missing_attrs(monkeypatch):
+    """01 스크립트처럼 --unnorm-key/--tag 가 없는 경우에도 죽지 않아야 한다."""
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    c = _cfg()
+    apply_overrides(c, SimpleNamespace(gpu=1))
+    assert c["device"] == "cuda:1"
+
+
+def test_apply_overrides_detects_visible_devices_conflict(monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2")
+    with pytest.raises(RuntimeError, match="CUDA_VISIBLE_DEVICES"):
+        apply_overrides(_cfg(), SimpleNamespace(gpu=3, device=None, model=None, unnorm_key=None))
+
+
+def test_cpu_does_not_set_egl_device(monkeypatch):
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("MUJOCO_EGL_DEVICE_ID", raising=False)
+    c = _cfg()
+    apply_overrides(c, SimpleNamespace(gpu=None, device="cpu", model=None, unnorm_key=None))
+    assert c["device"] == "cpu"
+    assert "MUJOCO_EGL_DEVICE_ID" not in os.environ

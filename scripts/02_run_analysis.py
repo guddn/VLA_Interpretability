@@ -20,6 +20,7 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from vlamod.device import apply_overrides, report_gpu  # noqa: E402
 from vlamod import env_libero as EL  # noqa: E402
 from vlamod import pipeline as P  # noqa: E402
 from vlamod import token_index as TI  # noqa: E402
@@ -35,16 +36,25 @@ def main() -> int:
     ap.add_argument("--max-steps", type=int, default=40)
     ap.add_argument("--stride", type=int, default=5, help="몇 스텝마다 분석할지 (전부 하면 느림)")
     ap.add_argument("--no-intervene", action="store_true")
+    ap.add_argument("--gpu", type=int, default=None, metavar="N",
+                    help="사용할 GPU 번호 (예: --gpu 3). --device 와 동시 사용 불가")
+    ap.add_argument("--device", default=None,
+                    help='--gpu 대신 문자열로 지정. "cuda:3" / "3" / "cpu"')
+    ap.add_argument("--model", default=None, help="체크포인트 경로/HF repo. config 값을 덮어씀")
+    ap.add_argument("--unnorm-key", default=None, help="action un-normalization key. config 값을 덮어씀")
+    ap.add_argument("--tag", default=None, help="출력 파일명 접미사 (체크포인트 여러 개 비교 시)")
     args = ap.parse_args()
 
     cfg = yaml.safe_load(open(args.config, encoding="utf-8"))
     mcfg = cfg["model"]
+    apply_overrides(mcfg, args)
     torch.manual_seed(cfg["run"]["seed"])
 
     vla = load_openvla(
         path=mcfg["path"], device=mcfg["device"], dtype=mcfg["dtype"],
         attn_implementation=mcfg["attn_implementation"],
     )
+    report_gpu(mcfg["device"])
 
     # visual span 은 한 번만 실측하고 재사용
     from PIL import Image
@@ -103,10 +113,11 @@ def main() -> int:
         task.env.close()
 
     df = pd.DataFrame(rows)
-    out_csv = f"outputs/analysis_{args.suite}.csv"
+    stem = f"{args.suite}{'_' + args.tag if args.tag else ''}"
+    out_csv = f"outputs/analysis_{stem}.csv"
     df.to_csv(out_csv, index=False)
     np.savez(
-        f"outputs/perlayer_{args.suite}.npz",
+        f"outputs/perlayer_{stem}.npz",
         R_raw=np.array([p["R_raw"] for p in per_layer_acc]),
         R_norm=np.array([p["R_norm"] for p in per_layer_acc]),
         R_vnorm=np.array([p["R_vnorm"] for p in per_layer_acc]),

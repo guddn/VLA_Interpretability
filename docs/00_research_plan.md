@@ -12,9 +12,10 @@
 2. **attention 비율 지표도 이미 있습니다.** `Restoring Linguistic Grounding in VLA`(2603.06001)가 **IVAR(Instruction Visual Attention Ratio)** = 텍스트 attention / (텍스트+비주얼 attention) 을 정의해 놓았습니다. 형우 님이 떠올린 지표와 사실상 같은 것입니다. **이걸 모르고 제안하면 리뷰에서 바로 맞습니다.**
 3. **그래서 살아남는 질문은 "비율이 얼마인가"가 아니라 "비율이 상황에 맞게 조절되는가"입니다.** 이 각도가 아직 비어 있고, 형우 님의 mechanistic interpretability 배경과도 맞습니다. 아래 §3에서 이 재정의를 다룹니다.
 
+
 ---
 
-## 1. 문제의식 정리 — 원안과 정정
+## 1. 문제의식 정리 — 기존 직관과 정정
 
 ### 1.1 형우 님의 원래 직관
 

@@ -23,13 +23,50 @@ conda activate vlamod
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl
 
 pytest -q tests/test_core.py               # GPU 없이 돌아가는 로직 검증
-python scripts/01_smoke_forward.py         # ★ 이걸 먼저 통과시킬 것
-python scripts/01_smoke_forward.py --libero --suite spatial --task-id 0
+python scripts/01_smoke_forward.py --gpu 0   # ★ 이걸 먼저 통과시킬 것
+python scripts/01_smoke_forward.py --gpu 0 --libero --suite spatial --task-id 0
 
-python scripts/02_run_analysis.py --suite spatial --tasks 0 1 2 --episodes 3
-python scripts/03_correlation.py --csv outputs/analysis_spatial.csv
-python scripts/04_counterfactual.py --suite object --tasks 0 1 2 3
-python scripts/05_plots.py --suite spatial
+python scripts/02_run_analysis.py --gpu 0 --suite spatial --tasks 0 1 2 --episodes 3
+python scripts/03_correlation.py --csv outputs/analysis_spatial.csv    # GPU 불필요
+python scripts/04_counterfactual.py --gpu 0 --suite object --tasks 0 1 2 3
+python scripts/05_plots.py --suite spatial                             # GPU 불필요
+```
+
+## GPU 지정
+
+모델을 올리는 스크립트(01 / 02 / 04)는 아래 인자를 받습니다. 03 / 05 는 GPU 를 안 씁니다.
+
+| 인자 | 예시 | 설명 |
+|---|---|---|
+| `--gpu N` | `--gpu 3` | **가장 간단한 방법.** 3번 GPU 사용 |
+| `--device` | `--device cuda:3` · `--device 3` · `--device cpu` | 문자열로 지정. `--gpu` 와 동시 사용 불가 |
+| `--model` | `--model openvla/openvla-7b-finetuned-libero-object` | 체크포인트 교체 |
+| `--unnorm-key` | `--unnorm-key libero_object` | action un-normalization key (02 / 04) |
+| `--tag` | `--tag object_ckpt` | 출력 파일명 접미사. 체크포인트 여러 개 비교 시 (02 / 04) |
+
+지정하지 않으면 `configs/default.yaml` 의 `model.device` 를 씁니다.
+
+**멀티 GPU 서버에서 반드시 알아야 할 것 두 가지:**
+
+1. **PyTorch 와 MuJoCo 는 GPU 를 따로 고릅니다.** 모델을 `cuda:3` 에 올려도 LIBERO 의
+   EGL 렌더링은 기본적으로 0번을 씁니다. `--gpu` 를 쓰면 `MUJOCO_EGL_DEVICE_ID` 를
+   자동으로 같은 번호로 맞춰 줍니다. 이걸 안 맞추면 0번 GPU 가 남의 작업으로 꽉 찼을 때
+   렌더링만 죽는 이상한 에러가 납니다.
+2. **`CUDA_VISIBLE_DEVICES` 와 섞어 쓰지 마세요.** 섞으면 번호가 0부터 재매핑됩니다.
+   코드가 이 상황을 감지해 경고하거나 에러를 냅니다.
+
+```bash
+# 3번 GPU 하나만 쓰기 (권장)
+python scripts/02_run_analysis.py --gpu 3 --suite spatial
+
+# 체크포인트 2개를 GPU 2개에서 동시에 (불변성 확인용)
+python scripts/02_run_analysis.py --gpu 0 --suite spatial \
+       --model openvla/openvla-7b-finetuned-libero-spatial \
+       --unnorm-key libero_spatial --tag spatial_ckpt &
+python scripts/02_run_analysis.py --gpu 1 --suite object \
+       --model openvla/openvla-7b-finetuned-libero-object \
+       --unnorm-key libero_object --tag object_ckpt &
+wait
 ```
 
 ## 구조
