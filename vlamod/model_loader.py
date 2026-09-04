@@ -79,12 +79,33 @@ def find_language_model(model):
     )
 
 
+def _max_memory_map(gpus: list[int], headroom_gb: float = 1.5) -> dict:
+    """각 GPU 의 **현재 여유**에서 headroom 을 뺀 값을 상한으로 씁니다.
+
+    고정값(예: "10GiB")을 쓰면 남의 작업이 늘었을 때 OOM 이 납니다.
+    """
+    mm = {}
+    for i in gpus:
+        free, _ = torch.cuda.mem_get_info(i)
+        usable = max(free / 1e9 - headroom_gb, 0.5)
+        mm[i] = f"{usable:.1f}GiB"
+    mm["cpu"] = "0GiB"          # CPU 오프로드 금지 — 조용히 느려지는 것을 막습니다
+    return mm
+
+
 def load_openvla(
     path: str = "openvla/openvla-7b-finetuned-libero-spatial",
     device: str = "cuda:0",
     dtype: str = "bfloat16",
     attn_implementation: str = "eager",
+    gpus: list[int] | None = None,
 ) -> LoadedVLA:
+    """gpus 가 2개 이상이면 층을 나눠 올립니다(model sharding).
+
+    수치는 단일 GPU 와 **동일**합니다. 같은 연산을 배치만 나눠 하는 것이라
+    attention 값도 action logit 도 바뀌지 않습니다. (양자화와 다른 점)
+    대신 층 경계마다 GPU 간 전송이 생겨 느려집니다.
+    """
     from transformers import AutoModelForVision2Seq, AutoProcessor
 
     if attn_implementation != "eager":
@@ -94,21 +115,49 @@ def load_openvla(
         )
 
     torch_dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[dtype]
-
     processor = AutoProcessor.from_pretrained(path, trust_remote_code=True)
-    model = AutoModelForVision2Seq.from_pretrained(
-        path,
+
+    common = dict(
         attn_implementation=attn_implementation,
         torch_dtype=torch_dtype,
         low_cpu_mem_usage=True,
         trust_remote_code=True,
-    ).to(device)
-    model.eval()
+    )
 
+    if gpus and len(gpus) >= 2:
+        mm = _max_memory_map(gpus)
+        print(f"[shard ] GPU {gpus} 에 분할 로드. 상한: "
+              + ", ".join(f"{k}={v}" for k, v in mm.items() if k != "cpu"))
+        try:
+            model = AutoModelForVision2Seq.from_pretrained(
+                path, device_map="auto", max_memory=mm, **common
+            )
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(
+                f"멀티 GPU 분할 로드에 실패했습니다: {e}\n"
+                "  이 모델이 accelerate 의 device_map 을 지원하지 않을 수 있습니다.\n"
+                "  (trust_remote_code 모델은 _no_split_modules 가 없으면 실패합니다)\n"
+                "  → 여유 20GB 이상인 단일 GPU 를 찾아 --gpu N 으로 쓰세요."
+            ) from e
+        # 입력은 첫 번째 장치로 보냅니다 (embedding 이 거기 있음)
+        primary = getattr(model, "hf_device_map", None)
+        first = f"cuda:{gpus[0]}"
+        if isinstance(primary, dict) and primary:
+            v = next(iter(primary.values()))
+            if isinstance(v, int):
+                first = f"cuda:{v}"
+            elif isinstance(v, str) and v.startswith("cuda"):
+                first = v
+        dev = torch.device(first)
+    else:
+        model = AutoModelForVision2Seq.from_pretrained(path, **common).to(device)
+        dev = torch.device(device)
+
+    model.eval()
     return LoadedVLA(
         model=model,
         processor=processor,
-        device=torch.device(device),
+        device=dev,
         dtype=torch_dtype,
         path=path,
     )

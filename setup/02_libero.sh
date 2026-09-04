@@ -20,6 +20,13 @@ export PIP_TIMEOUT=10
 # (configs/default.yaml 로는 해결되지 않습니다 — 그건 파이썬 스크립트용 설정입니다)
 export MUJOCO_GL=egl
 export PYOPENGL_PLATFORM=egl
+
+# (3) pip 제약 — LIBERO requirements 가 numpy>=2 / opencv5 를 올리는 것을 원천 차단합니다.
+#     이 스크립트 안의 모든 pip 명령에 자동 적용됩니다.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PIP_CONSTRAINT="${REPO_ROOT}/constraints.txt"
+echo "[pip] PIP_CONSTRAINT=${PIP_CONSTRAINT}"
+
 # ------------------------------------------------------------------------
 
 ENV_NAME="${ENV_NAME:-vlamod}"

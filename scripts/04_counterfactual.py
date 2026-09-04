@@ -93,7 +93,10 @@ def main() -> int:
     ap.add_argument("--hf-home", default=None,
                     help="HuggingFace 캐시 루트. config 의 env.hf_home 을 덮어씀")
     ap.add_argument("--gpu", type=int, default=None, metavar="N",
-                    help="사용할 GPU 번호 (예: --gpu 3). --device 와 동시 사용 불가")
+                    help="사용할 GPU 번호 (예: --gpu 3)")
+    ap.add_argument("--gpus", default=None, metavar="0,1",
+                    help="여러 GPU 에 모델을 분할 로드 (예: --gpus 0,1). "
+                         "한 장에 안 들어갈 때 씁니다. 수치는 단일 GPU 와 동일합니다.")
     ap.add_argument("--device", default=None,
                     help='--gpu 대신 문자열로 지정. "cuda:3" / "3" / "cpu"')
     ap.add_argument("--model", default=None, help="체크포인트 경로/HF repo. config 값을 덮어씀")
@@ -106,8 +109,9 @@ def main() -> int:
     mcfg = cfg["model"]
     apply_overrides(mcfg, args)
     vla = load_openvla(path=mcfg["path"], device=mcfg["device"], dtype=mcfg["dtype"],
-                       attn_implementation=mcfg["attn_implementation"])
-    report_gpu(mcfg["device"])
+                       attn_implementation=mcfg["attn_implementation"],
+                       gpus=mcfg.get("gpus"))
+    report_gpu(mcfg["device"], mcfg.get("gpus"))
 
     from PIL import Image
     import numpy as np

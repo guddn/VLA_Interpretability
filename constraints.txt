@@ -1,0 +1,14 @@
+# pip 전역 제약 — 이 환경에서 pip 을 쓸 때마다 자동 적용됩니다.
+#
+#   export PIP_CONSTRAINT=$(pwd)/constraints.txt      # 셸에서
+#
+# 왜 필요한가:
+#   LIBERO 의 libero_requirements.txt 가 numpy>=2 / opencv 5.x 를 요구합니다.
+#   그런데 torch 2.2.0 은 numpy 1.x 에 대해 컴파일되어 있어 numpy 2 에서
+#   "Numpy is not available" 로 죽습니다. 설치할 때마다 되돌리는 대신
+#   여기서 못 올라가게 막습니다.
+numpy<2
+opencv-python<5
+transformers==4.40.1
+tokenizers==0.19.1
+timm==0.9.10

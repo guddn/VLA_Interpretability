@@ -117,22 +117,53 @@ def _check_visible_devices(device: str) -> None:
     )
 
 
+def parse_gpus(value) -> list[int]:
+    """'0,1' / '0 1' / [0,1] → [0, 1]"""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        items = list(value)
+    else:
+        items = str(value).replace(" ", ",").split(",")
+    out = []
+    for it in items:
+        it = str(it).strip()
+        if it == "":
+            continue
+        if not it.isdigit():
+            raise ValueError(f"--gpus 는 숫자 목록이어야 합니다: {value!r}")
+        out.append(int(it))
+    if len(set(out)) != len(out):
+        raise ValueError(f"--gpus 에 중복이 있습니다: {value!r}")
+    return out
+
+
 def apply_overrides(mcfg: dict, args) -> dict:
     """argparse 결과로 config 의 model 섹션을 덮어씁니다. mcfg 를 제자리 수정 후 반환.
 
     인식하는 인자 (없으면 조용히 건너뜀):
-      --gpu / --device / --model / --unnorm-key
+      --gpu / --gpus / --device / --model / --unnorm-key
     """
     gpu = getattr(args, "gpu", None)
     dev = getattr(args, "device", None)
+    gpus = parse_gpus(getattr(args, "gpus", None))
 
-    if gpu is not None and dev is not None:
-        raise SystemExit("--gpu 와 --device 는 같이 쓸 수 없습니다. 하나만 주세요.")
+    n_given = sum(x is not None and x != [] for x in (gpu, dev, gpus or None))
+    if n_given > 1:
+        raise SystemExit("--gpu / --gpus / --device 중 하나만 쓰세요.")
+
+    if gpus:
+        if len(gpus) == 1:
+            gpus, gpu = [], gpus[0]
+        else:
+            mcfg["gpus"] = gpus
+            mcfg["device"] = f"cuda:{gpus[0]}"
 
     chosen = gpu if gpu is not None else dev
     if chosen is not None:
         mcfg["device"] = normalize_device(chosen)
 
+    mcfg.setdefault("gpus", [])
     mcfg["device"] = normalize_device(mcfg.get("device", "cuda:0"))
     _check_visible_devices(mcfg["device"])
 
@@ -148,14 +179,27 @@ def apply_overrides(mcfg: dict, args) -> dict:
         os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
         os.environ["MUJOCO_EGL_DEVICE_ID"] = str(idx)
 
-    print(f"[device] model={mcfg['device']}  render(EGL)={os.environ.get('MUJOCO_EGL_DEVICE_ID', '-')}")
+    shard = f"  shard={mcfg['gpus']}" if mcfg.get("gpus") else ""
+    print(f"[device] model={mcfg['device']}{shard}  "
+          f"render(EGL)={os.environ.get('MUJOCO_EGL_DEVICE_ID', '-')}")
     print(f"[model ] {mcfg['path']}  unnorm_key={mcfg.get('unnorm_key')}")
     return mcfg
 
 
-def report_gpu(device: str) -> None:
+def report_gpu(device: str, gpus: list[int] | None = None) -> None:
     """실제로 그 GPU 가 잡혔는지 확인 출력. 모델 로드 직후에 부르세요."""
     import torch
+
+    if gpus:
+        total_free = 0.0
+        for i in gpus:
+            free, total = torch.cuda.mem_get_info(i)
+            alloc = torch.cuda.memory_allocated(i)
+            total_free += free
+            print(f"[gpu   ] cuda:{i} {torch.cuda.get_device_name(i)}  "
+                  f"이 프로세스 {alloc/1e9:.1f}GB / 남은 여유 {free/1e9:.1f}GB")
+        print(f"[gpu   ] 합계 여유 {total_free/1e9:.1f}GB (분할 로드)")
+        return
 
     if device == "cpu":
         print("[gpu   ] cpu 모드 — 매우 느립니다. 디버깅용으로만 쓰세요.")

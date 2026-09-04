@@ -323,3 +323,51 @@ def test_apply_env_warns_if_hf_already_imported(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "huggingface_hub", object())
     with pytest.warns(UserWarning, match="huggingface_hub"):
         apply_env({"env": {"hf_home": str(tmp_path / "c")}}, SimpleNamespace())
+
+
+# ----------------------------------------------------------- multi-GPU
+from vlamod.device import parse_gpus  # noqa: E402
+
+
+@pytest.mark.parametrize("given,expected", [
+    ("0,1", [0, 1]), ("0 1", [0, 1]), ("2", [2]), ([3, 4], [3, 4]), (None, []),
+    ("0, 1, 2", [0, 1, 2]),
+])
+def test_parse_gpus(given, expected):
+    assert parse_gpus(given) == expected
+
+
+@pytest.mark.parametrize("bad", ["0,a", "x", "0,,1,b"])
+def test_parse_gpus_rejects_garbage(bad):
+    with pytest.raises(ValueError):
+        parse_gpus(bad)
+
+
+def test_parse_gpus_rejects_duplicates():
+    with pytest.raises(ValueError, match="중복"):
+        parse_gpus("1,1")
+
+
+def test_apply_overrides_multi_gpu(monkeypatch):
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    c = _cfg()
+    apply_overrides(c, SimpleNamespace(gpu=None, gpus="0,1", device=None,
+                                       model=None, unnorm_key=None))
+    assert c["gpus"] == [0, 1]
+    assert c["device"] == "cuda:0"          # 입력은 첫 장치로
+
+
+def test_apply_overrides_single_element_gpus_is_plain_gpu(monkeypatch):
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    c = _cfg()
+    apply_overrides(c, SimpleNamespace(gpu=None, gpus="3", device=None,
+                                       model=None, unnorm_key=None))
+    assert c["gpus"] == []                  # 1장이면 분할 안 함
+    assert c["device"] == "cuda:3"
+
+
+def test_apply_overrides_rejects_gpu_and_gpus(monkeypatch):
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    with pytest.raises(SystemExit):
+        apply_overrides(_cfg(), SimpleNamespace(gpu=0, gpus="0,1", device=None,
+                                                model=None, unnorm_key=None))
