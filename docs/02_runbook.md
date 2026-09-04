@@ -1,7 +1,7 @@
 # 실행 런북 — 무엇을, 어떤 순서로, 어디까지 확인하고 넘어갈 것인가
 
-작성일: 2026-08-25
-전제: A6000 48GB 서버, Ubuntu, CUDA 12.x
+작성일: 2026-08-25 (개정: 2026-09-04 — GPU 인자 반영)
+전제: A6000 서버, Ubuntu, CUDA 12.x / 로컬은 C:\Users\hello\PycharmProjects\VLA_Interpretability
 
 > 각 단계에 **통과 기준(Gate)** 이 있습니다. 기준을 못 넘으면 다음 단계로 가지 마세요.
 > 앞 단계의 가정 위에서 뒤 단계가 돌기 때문에, 조용히 틀린 채로 진행하면 3일 뒤에 전부 다시 해야 합니다.
@@ -43,15 +43,15 @@ Stage 6   scripts/05_plots        ← 그림 4장
 ## Stage 0 — 노트북에서 로직 검증 (5분, GPU 불필요)
 
 ```bash
-cd D:\development\Github\_연구\VLA_Interpretability
+cd C:\Users\hello\PycharmProjects\VLA_Interpretability
 pip install torch pytest          # CPU 빌드로 충분
 pytest -q tests/test_core.py
 ```
 
-**Gate 0**: `14 passed` 가 나와야 합니다.
+**Gate 0**: `34 passed` 가 나와야 합니다.
 
 여기서 검증되는 것: 지표 계산식, 질량 분해 합=1, KL 성질, knockout 마스킹 후 softmax 재정규화,
-프롬프트 오프셋 매핑. **모델 없이 잡을 수 있는 실수는 여기서 다 잡힙니다.**
+프롬프트 오프셋 매핑, **device 인자 파싱**. **모델 없이 잡을 수 있는 실수는 여기서 다 잡힙니다.**
 
 실패하면 서버에 갈 필요가 없습니다. 실패한 테스트 이름을 그대로 알려주세요.
 
@@ -60,29 +60,52 @@ pytest -q tests/test_core.py
 ## Stage 1 — 서버 환경 구축 (1~2시간, 대부분 다운로드 대기)
 
 ```bash
-# 저장소를 서버로
-rsync -av --exclude '.git' --exclude '.idea' \
-      ./VLA_Interpretability/ user@server:~/VLA_Interpretability/
-# 또는 git push 후 서버에서 clone
+# 저장소를 서버로 — 셋 중 하나
+#  (a) PyCharm: Tools → Deployment → Upload to...   ← .idea/deployment.xml 이 있으면 이 방식
+#  (b) rsync
+rsync -av --exclude '.git' --exclude '.idea' --exclude '__pycache__' \
+      ~/PycharmProjects/VLA_Interpretability/ user@server:~/VLA_Interpretability/
+#  (c) git push 후 서버에서 clone
 
 ssh user@server
 cd ~/VLA_Interpretability
 
+# 전송 누락 확인 — 이 파일이 없으면 01 스크립트가 ModuleNotFoundError 로 죽습니다
+ls vlamod/device.py
+
 bash setup/01_env.sh              # conda env "vlamod" + torch + OpenVLA
 bash setup/02_libero.sh           # LIBERO + robosuite/MuJoCo
 conda activate vlamod
-export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl     # ← .bashrc 에 넣어두세요
+# (MUJOCO_GL 등은 config 가 설정하므로 export 불필요. 설치 스크립트는 자체 export 함)
 
-python setup/03_download_ckpt.py --suite spatial   # ~15GB
+# 체크포인트 (~15GB). 저장 위치는 configs/default.yaml 의 env.hf_home 이 정합니다.
+python setup/03_download_ckpt.py --suite spatial
 ```
+
+> **환경변수는 `.bashrc` 가 아니라 `configs/default.yaml` 의 `env:` 섹션에서 관리합니다.**
+> 다운로드 스크립트와 분석 스크립트가 같은 값을 읽으므로, 경로가 바뀌면 그 한 줄만 고치면 됩니다.
+> 서버가 여러 대면 `configs/<서버명>.yaml` 로 복사해 두고 `--config` 로 고르세요 —
+> 재현할 때 "어떤 config 로 돌렸는지"만 남기면 됩니다.
+>
+> ```yaml
+> env:
+>   hf_home: "~/shared/hdd_ext/nvme1/kimhyeongwoo"
+>   mujoco_gl: "egl"
+>   pyopengl_platform: "egl"
+> ```
 
 **Gate 1** — 아래 셋이 모두 통과해야 합니다.
 
 ```bash
-python -c "import torch; print(torch.cuda.get_device_name(0))"   # A6000 출력
+python -c "import torch; print(torch.cuda.device_count(), torch.cuda.get_device_name(0))"
 python -c "import transformers; print(transformers.__version__)" # 4.40.x
 python -c "from libero.libero import benchmark; print(list(benchmark.get_benchmark_dict().keys()))"
+nvidia-smi --query-gpu=index,name,memory.used,memory.total --format=csv   # 어느 GPU 가 비었는지
 ```
+
+**여기서 쓸 GPU 번호를 정해 두세요.** 이후 모든 명령에 `--gpu N` 으로 넘깁니다.
+`nvidia-smi` 의 `memory.used` 가 낮은 번호를 고르시면 됩니다. OpenVLA-7B(bf16) 는
+가중치 약 16GB + attention 버퍼가 필요하므로 여유 20GB 이상을 권합니다.
 
 `01_env.sh` 안에 transformers 4.40 검사 `assert` 가 들어 있어서, 버전이 다르면 설치 단계에서 멈춥니다.
 
@@ -97,11 +120,47 @@ python -c "from libero.libero import benchmark; print(list(benchmark.get_benchma
 
 ---
 
+## GPU 지정 (Stage 2 이후 모든 명령에 공통)
+
+모델을 올리는 **01 / 02 / 04** 만 아래 인자를 받습니다. **03 / 05 는 GPU 를 쓰지 않습니다.**
+
+| 인자 | 예시 | 설명 |
+|---|---|---|
+| `--gpu N` | `--gpu 3` | 가장 간단. 3번 GPU 사용 |
+| `--device` | `--device cuda:3` · `--device 3` · `--device cpu` | 문자열 지정. `--gpu` 와 동시 사용 불가 |
+| `--model` | `--model openvla/openvla-7b-finetuned-libero-object` | 체크포인트 교체 |
+| `--unnorm-key` | `--unnorm-key libero_object` | action un-normalization key (02 / 04) |
+| `--tag` | `--tag object_ckpt` | 출력 파일명 접미사 (02 / 04) |
+
+생략하면 `configs/default.yaml` 의 `model.device` 를 씁니다.
+
+로드 직후 아래가 출력됩니다. **요청한 번호가 그대로 찍히는지 매번 확인하세요.**
+
+```
+[device] model=cuda:3  render(EGL)=3
+[model ] openvla/openvla-7b-finetuned-libero-spatial  unnorm_key=libero_spatial
+[gpu   ] cuda:3 NVIDIA RTX A6000  사용가능 47.2GB / 전체 51.5GB
+```
+
+### 멀티 GPU 서버의 함정 두 가지
+
+**① PyTorch 와 MuJoCo 는 GPU 를 따로 고릅니다.**
+모델을 `cuda:3` 에 올려도 LIBERO 의 EGL 렌더링은 기본적으로 0번을 씁니다.
+0번이 남의 작업으로 꽉 차 있으면 **모델은 멀쩡한데 렌더링만 죽는** 에러가 납니다.
+`--gpu` 를 쓰면 `MUJOCO_EGL_DEVICE_ID` 를 같은 번호로 맞춰 주므로 이 문제가 사라집니다.
+출력의 `render(EGL)=` 이 `model=` 과 같은 번호인지 확인하세요.
+
+**② `CUDA_VISIBLE_DEVICES` 와 섞어 쓰지 마세요.**
+섞으면 번호가 0부터 재매핑됩니다 — `CUDA_VISIBLE_DEVICES=3` 상태의 `--gpu 3` 은
+존재하지 않는 GPU 입니다. 코드가 이 상황을 감지해 에러를 냅니다. 한 방식만 쓰세요.
+
+---
+
 ## Stage 2 ★ — 스모크 테스트 (30분, 이 프로젝트의 관문)
 
 ```bash
-python scripts/01_smoke_forward.py                        # 합성 이미지, 구조만 검증
-python scripts/01_smoke_forward.py --libero --suite spatial --task-id 0
+python scripts/01_smoke_forward.py --gpu 0                        # 합성 이미지, 구조만 검증
+python scripts/01_smoke_forward.py --gpu 0 --libero --suite spatial --task-id 0
 ```
 
 스크립트가 7단계를 순서대로 출력합니다. **각 단계의 통과 기준**은 이렇습니다.
@@ -148,10 +207,27 @@ python scripts/01_smoke_forward.py --libero --suite spatial --task-id 0
 
 ```bash
 # 먼저 작게 돌려 시간을 재세요
-python scripts/02_run_analysis.py --suite spatial --tasks 0 --episodes 1 --max-steps 20 --stride 5
+python scripts/02_run_analysis.py --gpu 0 --suite spatial --tasks 0 --episodes 1 --max-steps 20 --stride 5
 
 # 문제 없으면 본 실행
-python scripts/02_run_analysis.py --suite spatial --tasks 0 1 2 3 4 --episodes 3 --max-steps 40 --stride 5
+python scripts/02_run_analysis.py --gpu 0 --suite spatial --tasks 0 1 2 3 4 --episodes 3 --max-steps 40 --stride 5
+```
+
+### GPU 가 여러 장이면 체크포인트를 병렬로
+
+한 체크포인트 결과만으로는 "그 모델 얘기 아니냐"를 막을 수 없습니다.
+**최소 2개 체크포인트**에서 같은 성질이 나오는지 확인해 두면, 나중에 실물(UR5e)로
+넘어갈 때 전이를 주장하는 근거가 됩니다. `--tag` 로 출력 파일명이 갈립니다.
+
+```bash
+python scripts/02_run_analysis.py --gpu 0 --suite spatial \
+       --model openvla/openvla-7b-finetuned-libero-spatial \
+       --unnorm-key libero_spatial --tag spatial_ckpt &
+python scripts/02_run_analysis.py --gpu 1 --suite object \
+       --model openvla/openvla-7b-finetuned-libero-object \
+       --unnorm-key libero_object --tag object_ckpt &
+wait
+# → outputs/analysis_spatial_spatial_ckpt.csv, outputs/analysis_object_object_ckpt.csv
 ```
 
 ### 파라미터가 무엇을 정하는가
@@ -190,7 +266,7 @@ A6000 bf16 + **eager attention**(flash 보다 느림) 기준 대략 **2~4초/스
 ## Stage 4 — H2 검정 (1분)
 
 ```bash
-python scripts/03_correlation.py --csv outputs/analysis_spatial.csv
+python scripts/03_correlation.py --csv outputs/analysis_spatial.csv   # GPU 불필요
 ```
 
 **질문**: attention 비율이 인과 기여를 예측하는가?
@@ -218,7 +294,7 @@ python scripts/03_correlation.py --csv outputs/analysis_spatial.csv
 
 ```bash
 # 각 task 의 지시문과 첫 프레임을 뽑아 눈으로 확인
-python scripts/01_smoke_forward.py --libero --suite object --task-id 0
+python scripts/01_smoke_forward.py --gpu 0 --libero --suite object --task-id 0
 # outputs/smoke_libero_view.png 를 열어본다. task-id 를 바꿔가며 반복
 ```
 
@@ -231,7 +307,7 @@ python scripts/01_smoke_forward.py --libero --suite object --task-id 0
 ### 5-b. 실행
 
 ```bash
-python scripts/04_counterfactual.py --suite object \
+python scripts/04_counterfactual.py --gpu 0 --suite object \
        --tasks 0 1 2 3 4 5 --episodes 2 \
        --ambiguous-tasks 1 3 5          # ← 5-a 에서 고른 id
 ```
@@ -274,7 +350,7 @@ True       swapped      0.4855   0.0051
 ## Stage 6 — 그림 (1분)
 
 ```bash
-python scripts/05_plots.py --suite spatial
+python scripts/05_plots.py --suite spatial     # GPU 불필요
 python scripts/05_plots.py --suite object      # counterfactual 그림
 ```
 
@@ -291,7 +367,7 @@ python scripts/05_plots.py --suite object      # counterfactual 그림
 
 | 일차 | 할 일 | 산출물 |
 |---|---|---|
-| 1 | Stage 0 + Stage 1 | 환경 완성 |
+| 1 | Stage 0 + Stage 1 (+ 쓸 GPU 번호 확정) | 환경 완성 |
 | 2~3 | **Stage 2** (여기서 대부분의 시간이 갑니다) | 구조 검증 통과 |
 | 4 | Stage 3 소규모 → 시간 측정 → 규모 확정 | 파라미터 확정 |
 | 5~6 | Stage 3 본 실행 | `analysis_spatial.csv` |
@@ -333,6 +409,12 @@ python scripts/05_plots.py --suite object      # counterfactual 그림
 | CUDA OOM | 48GB 면 안 날 텐데 | 다른 프로세스 확인. `nvidia-smi` |
 | `n_identical_dof` 가 항상 7 | 정상일 수 있음 (언어 무시) | 단, `valid` 조건에서도 7이면 캡처가 잘못된 것 |
 | 그림에 글자가 네모 | 한글 폰트 없음 | 축·제목은 이미 영문. 파일명에 한글이 있으면 그것만 바꾸기 |
+| `ModuleNotFoundError: vlamod.device` | 서버 전송 누락 | `vlamod/device.py` 업로드. PyCharm Deployment 는 수동 업로드 필요 |
+| `--gpu 와 --device 는 같이 쓸 수 없습니다` | 두 인자 동시 사용 | 하나만 주기 |
+| `CUDA_VISIBLE_DEVICES=... 로 N개만 보이는데` | 환경변수와 `--gpu` 혼용 | 둘 중 하나만. 환경변수를 쓰면 `--gpu 0` |
+| 모델은 뜨는데 LIBERO 렌더링만 실패 | EGL 이 다른 GPU 사용 | `[device]` 출력의 `render(EGL)` 이 `model` 과 같은지 확인 |
+| `GPU N 를 요청했지만 보이는 GPU 는 M개` | 번호 범위 초과 | `nvidia-smi` 로 실제 번호 확인 |
+| `사용가능 XGB` 경고 (18GB 미만) | 그 GPU 가 이미 사용 중 | 다른 번호로 `--gpu` 변경 |
 
 ---
 

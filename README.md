@@ -32,6 +32,27 @@ python scripts/04_counterfactual.py --gpu 0 --suite object --tasks 0 1 2 3
 python scripts/05_plots.py --suite spatial                             # GPU 불필요
 ```
 
+## 환경변수 — config 로 관리 (.bashrc 불필요)
+
+`configs/default.yaml` 의 `env:` 섹션이 프로세스 환경변수를 설정합니다.
+**경로가 바뀌면 이 한 줄만 고치면 됩니다.**
+
+```yaml
+env:
+  hf_home: "~/shared/hdd_ext/nvme1/kimhyeongwoo"   # HF 캐시 (다운로드 + 로드 공용)
+  mujoco_gl: "egl"                                  # headless 렌더링
+  pyopengl_platform: "egl"
+```
+
+- `setup/03_download_ckpt.py` 와 `scripts/01·02·04` 가 **같은 값**을 읽습니다.
+- 서버가 여러 대면 파일을 복사해서 `configs/<서버명>.yaml` 로 만들고
+  `--config configs/<서버명>.yaml` 로 골라 쓰세요. **재현 시 config 파일명만 기록하면 됩니다.**
+- 일회성 덮어쓰기: `--hf-home <경로>`
+
+> **구현 주의:** HF 캐시 경로는 `huggingface_hub` 가 import 되는 시점에 확정됩니다.
+> 그래서 `apply_env()` 를 스크립트 맨 앞(모델 로드 전)에서 호출합니다.
+> 순서가 바뀌면 조용히 무시되므로, 이미 import 된 경우 경고를 냅니다.
+
 ## GPU 지정
 
 모델을 올리는 스크립트(01 / 02 / 04)는 아래 인자를 받습니다. 03 / 05 는 GPU 를 안 씁니다.
@@ -43,6 +64,8 @@ python scripts/05_plots.py --suite spatial                             # GPU 불
 | `--model` | `--model openvla/openvla-7b-finetuned-libero-object` | 체크포인트 교체 |
 | `--unnorm-key` | `--unnorm-key libero_object` | action un-normalization key (02 / 04) |
 | `--tag` | `--tag object_ckpt` | 출력 파일명 접미사. 체크포인트 여러 개 비교 시 (02 / 04) |
+| `--hf-home` | `--hf-home /data/hf` | HF 캐시 루트. config 의 `env.hf_home` 을 덮어씀 |
+| `--config` | `--config configs/lab.yaml` | 설정 파일 선택 |
 
 지정하지 않으면 `configs/default.yaml` 의 `model.device` 를 씁니다.
 

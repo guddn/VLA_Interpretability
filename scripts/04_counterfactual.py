@@ -40,7 +40,7 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from vlamod.device import apply_overrides, report_gpu  # noqa: E402
+from vlamod.device import apply_env, apply_overrides, report_gpu  # noqa: E402
 from vlamod import capture as cap  # noqa: E402
 from vlamod import env_libero as EL  # noqa: E402
 from vlamod import metrics as M  # noqa: E402
@@ -90,6 +90,8 @@ def main() -> int:
     ap.add_argument("--steps", type=int, nargs="+", default=[10, 25, 40])
     ap.add_argument("--ambiguous-tasks", type=int, nargs="*", default=[],
                     help="장면에 후보 물체가 둘 이상인 task id (직접 확인해서 지정)")
+    ap.add_argument("--hf-home", default=None,
+                    help="HuggingFace 캐시 루트. config 의 env.hf_home 을 덮어씀")
     ap.add_argument("--gpu", type=int, default=None, metavar="N",
                     help="사용할 GPU 번호 (예: --gpu 3). --device 와 동시 사용 불가")
     ap.add_argument("--device", default=None,
@@ -100,6 +102,7 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg = yaml.safe_load(open(args.config, encoding="utf-8"))
+    apply_env(cfg, args)          # ← transformers/libero import 전에 반드시 먼저
     mcfg = cfg["model"]
     apply_overrides(mcfg, args)
     vla = load_openvla(path=mcfg["path"], device=mcfg["device"], dtype=mcfg["dtype"],

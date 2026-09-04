@@ -22,7 +22,56 @@
 from __future__ import annotations
 
 import os
+import sys
 import warnings
+
+
+# =====================================================================
+# 환경변수 — configs 의 env 섹션에서 읽습니다 (.bashrc 를 고칠 필요 없음)
+# =====================================================================
+def apply_env(cfg: dict, args=None) -> dict:
+    """config 의 `env:` 섹션으로 프로세스 환경변수를 설정합니다.
+
+    **반드시 transformers / huggingface_hub / libero 를 import 하기 전에** 부르세요.
+    HF 캐시 경로는 huggingface_hub 가 import 되는 시점에 확정되므로,
+    그 뒤에 설정하면 조용히 무시됩니다.
+
+    우선순위: CLI 인자 > config > 기존 환경변수 > 시스템 기본
+
+    반환: 실제로 적용된 값 dict (로그용)
+    """
+    ecfg = dict((cfg or {}).get("env") or {})
+    applied: dict[str, str] = {}
+
+    # --- HuggingFace 캐시 -------------------------------------------
+    hf_home = getattr(args, "hf_home", None) or ecfg.get("hf_home")
+    if hf_home:
+        if "huggingface_hub" in sys.modules:
+            warnings.warn(
+                "huggingface_hub 가 이미 import 되었습니다. HF_HOME 설정이 반영되지 않을 수 "
+                "있습니다. apply_env() 를 스크립트 맨 앞에서 호출하세요.",
+                stacklevel=2,
+            )
+        root = os.path.abspath(os.path.expanduser(str(hf_home)))
+        try:
+            os.makedirs(os.path.join(root, "hub"), exist_ok=True)
+        except OSError as e:
+            raise RuntimeError(f"hf_home 경로를 만들 수 없습니다: {root} ({e})") from e
+        os.environ["HF_HOME"] = root
+        os.environ["HF_HUB_CACHE"] = os.path.join(root, "hub")
+        applied["HF_HOME"] = root
+
+    # --- 렌더링 -----------------------------------------------------
+    for key, envname in (("mujoco_gl", "MUJOCO_GL"),
+                         ("pyopengl_platform", "PYOPENGL_PLATFORM")):
+        val = ecfg.get(key)
+        if val:
+            os.environ[envname] = str(val)
+            applied[envname] = str(val)
+
+    if applied:
+        print("[env   ] " + "  ".join(f"{k}={v}" for k, v in applied.items()))
+    return applied
 
 
 def normalize_device(value) -> str:

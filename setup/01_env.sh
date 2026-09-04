@@ -10,6 +10,19 @@
 # ============================================================
 set -euo pipefail
 
+# --- 설치 전 공통 설정 --------------------------------------------------
+# (1) NVIDIA NGC pip 미러가 /etc/pip.conf 에 박혀 있으면 패키지마다 DNS 5회 재시도가
+#     걸려 설치가 멈춘 것처럼 보입니다. 환경변수가 설정파일보다 우선하므로 여기서 비웁니다.
+export PIP_EXTRA_INDEX_URL=""
+export PIP_RETRIES=2
+export PIP_TIMEOUT=10
+
+# (2) headless 렌더링. **라이브러리 import 전에** 있어야 하므로 스크립트 맨 위에 둡니다.
+#     (configs/default.yaml 로는 해결되지 않습니다 — 그건 파이썬 스크립트용 설정입니다)
+export MUJOCO_GL=egl
+export PYOPENGL_PLATFORM=egl
+# ------------------------------------------------------------------------
+
 ENV_NAME="${ENV_NAME:-vlamod}"
 
 echo "[1/5] conda 환경 생성: ${ENV_NAME}"

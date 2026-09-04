@@ -279,3 +279,47 @@ def test_cpu_does_not_set_egl_device(monkeypatch):
     apply_overrides(c, SimpleNamespace(gpu=None, device="cpu", model=None, unnorm_key=None))
     assert c["device"] == "cpu"
     assert "MUJOCO_EGL_DEVICE_ID" not in os.environ
+
+
+# -------------------------------------------------------------- apply_env
+from vlamod.device import apply_env  # noqa: E402
+
+
+def test_apply_env_sets_hf_home(tmp_path, monkeypatch):
+    monkeypatch.delenv("HF_HOME", raising=False)
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+    cfg = {"env": {"hf_home": str(tmp_path / "cache"), "mujoco_gl": "egl",
+                   "pyopengl_platform": "egl"}}
+    applied = apply_env(cfg, SimpleNamespace())
+    assert os.environ["HF_HOME"] == str(tmp_path / "cache")
+    assert os.environ["HF_HUB_CACHE"] == str(tmp_path / "cache" / "hub")
+    assert (tmp_path / "cache" / "hub").is_dir()      # 디렉토리를 실제로 만든다
+    assert os.environ["MUJOCO_GL"] == "egl"
+    assert applied["HF_HOME"].endswith("cache")
+
+
+def test_apply_env_cli_beats_config(tmp_path, monkeypatch):
+    monkeypatch.delenv("HF_HOME", raising=False)
+    cfg = {"env": {"hf_home": str(tmp_path / "from_config")}}
+    apply_env(cfg, SimpleNamespace(hf_home=str(tmp_path / "from_cli")))
+    assert os.environ["HF_HOME"] == str(tmp_path / "from_cli")
+
+
+def test_apply_env_expands_tilde(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("HF_HOME", raising=False)
+    apply_env({"env": {"hf_home": "~/mycache"}}, SimpleNamespace())
+    assert os.environ["HF_HOME"] == str(tmp_path / "mycache")
+
+
+def test_apply_env_noop_without_section(monkeypatch):
+    monkeypatch.delenv("HF_HOME", raising=False)
+    assert apply_env({}, SimpleNamespace()) == {}
+    assert "HF_HOME" not in os.environ
+
+
+def test_apply_env_warns_if_hf_already_imported(tmp_path, monkeypatch):
+    monkeypatch.delenv("HF_HOME", raising=False)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", object())
+    with pytest.warns(UserWarning, match="huggingface_hub"):
+        apply_env({"env": {"hf_home": str(tmp_path / "c")}}, SimpleNamespace())

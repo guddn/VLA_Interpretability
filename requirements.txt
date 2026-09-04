@@ -4,11 +4,12 @@ tokenizers==0.19.1
 timm==0.9.10
 accelerate>=0.25.0
 einops
-numpy<2.0
+numpy<2.0          # torch 2.2.0 이 numpy 1.x 로 컴파일됨. LIBERO 설치가 2.x 로 올리므로 마지막에 재확인할 것
 pandas
 scipy
 matplotlib
 pyyaml
 pytest
+opencv-python<5     # 5.x 는 numpy>=2 를 요구해 위 numpy 핀과 충돌
 Pillow
 huggingface_hub

@@ -1,4 +1,20 @@
 # 실험 기본 설정
+#
+# 환경변수를 여기서 관리합니다. .bashrc 를 고칠 필요가 없습니다.
+# 서버가 바뀌면 이 파일을 복사해서 configs/<이름>.yaml 로 만들고
+#   python scripts/01_smoke_forward.py --config configs/<이름>.yaml
+# 처럼 쓰세요. 재현 시 "어떤 config 로 돌렸는지"만 기록하면 됩니다.
+
+env:
+  # HuggingFace 캐시 루트. null 이면 시스템 기본(~/.cache/huggingface).
+  # 모델 파일은 <hf_home>/hub/models--openvla--... 아래에 들어갑니다.
+  # !! 다운로드와 로드 **양쪽** 에 쓰입니다. 여기만 바꾸면 둘 다 따라갑니다.
+  hf_home: "~/shared/hdd_ext/nvme1/kimhyeongwoo"
+
+  # headless 렌더링 (LIBERO/MuJoCo). 서버면 egl, 로컬 GUI 면 glfw.
+  mujoco_gl: "egl"
+  pyopengl_platform: "egl"
+
 model:
   # setup/03_download_ckpt.py 의 CKPTS 와 맞춰 쓰세요.
   path: "openvla/openvla-7b-finetuned-libero-spatial"
