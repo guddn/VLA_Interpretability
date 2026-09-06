@@ -371,3 +371,24 @@ def test_apply_overrides_rejects_gpu_and_gpus(monkeypatch):
     with pytest.raises(SystemExit):
         apply_overrides(_cfg(), SimpleNamespace(gpu=0, gpus="0,1", device=None,
                                                 model=None, unnorm_key=None))
+
+
+# ------------------------------------------------- headroom / cpu offload
+def test_apply_overrides_headroom_default(monkeypatch):
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    c = _cfg()
+    apply_overrides(c, SimpleNamespace(gpu=0, gpus=None, device=None, model=None,
+                                       unnorm_key=None))
+    assert c["headroom_gb"] == 1.5
+    assert c["cpu_offload"] is False
+
+
+def test_apply_overrides_headroom_override(monkeypatch):
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    c = _cfg()
+    apply_overrides(c, SimpleNamespace(gpu=None, gpus="0,6", device=None, model=None,
+                                       unnorm_key=None, headroom_gb=0.8,
+                                       allow_cpu_offload=True))
+    assert c["headroom_gb"] == 0.8
+    assert c["cpu_offload"] is True
+    assert c["gpus"] == [0, 6]

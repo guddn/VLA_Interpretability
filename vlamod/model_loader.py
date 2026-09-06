@@ -79,18 +79,30 @@ def find_language_model(model):
     )
 
 
-def _max_memory_map(gpus: list[int], headroom_gb: float = 1.5) -> dict:
+# OpenVLA-7B(≈7.5B) bf16 가중치의 대략적인 크기 (GB)
+WEIGHTS_GB = 15.0
+
+
+def _max_memory_map(gpus: list[int], headroom_gb: float = 1.5,
+                    cpu_offload: bool = False) -> tuple[dict, float]:
     """각 GPU 의 **현재 여유**에서 headroom 을 뺀 값을 상한으로 씁니다.
 
     고정값(예: "10GiB")을 쓰면 남의 작업이 늘었을 때 OOM 이 납니다.
+
+    headroom_gb : CUDA 컨텍스트 + 활성값 + KV 캐시용 마진.
+                  메모리가 빠듯하면 0.8 까지 줄일 수 있지만 OOM 위험이 커집니다.
+    cpu_offload : True 면 GPU 에 다 못 올린 층을 CPU 로 넘깁니다.
+                  **매우 느려집니다**(층마다 PCIe 전송). 구조 검증용으로만 쓰세요.
     """
-    mm = {}
+    mm, total = {}, 0.0
     for i in gpus:
         free, _ = torch.cuda.mem_get_info(i)
-        usable = max(free / 1e9 - headroom_gb, 0.5)
+        usable = max(free / 1e9 - headroom_gb, 0.3)
         mm[i] = f"{usable:.1f}GiB"
-    mm["cpu"] = "0GiB"          # CPU 오프로드 금지 — 조용히 느려지는 것을 막습니다
-    return mm
+        total += usable
+    # 기본은 CPU 오프로드 금지 — 조용히 100배 느려지는 것을 막습니다
+    mm["cpu"] = "48GiB" if cpu_offload else "0GiB"
+    return mm, total
 
 
 def load_openvla(
@@ -99,6 +111,8 @@ def load_openvla(
     dtype: str = "bfloat16",
     attn_implementation: str = "eager",
     gpus: list[int] | None = None,
+    headroom_gb: float = 1.5,
+    cpu_offload: bool = False,
 ) -> LoadedVLA:
     """gpus 가 2개 이상이면 층을 나눠 올립니다(model sharding).
 
@@ -125,9 +139,24 @@ def load_openvla(
     )
 
     if gpus and len(gpus) >= 2:
-        mm = _max_memory_map(gpus)
-        print(f"[shard ] GPU {gpus} 에 분할 로드. 상한: "
+        mm, total = _max_memory_map(gpus, headroom_gb, cpu_offload)
+        print(f"[shard ] GPU {gpus} 에 분할 로드 (headroom {headroom_gb}GB/장). 상한: "
               + ", ".join(f"{k}={v}" for k, v in mm.items() if k != "cpu"))
+        print(f"[shard ] 사용 가능 합계 {total:.1f}GB  /  가중치 약 {WEIGHTS_GB:.0f}GB 필요")
+        if total < WEIGHTS_GB:
+            msg = (
+                f"사용 가능 합계 {total:.1f}GB 가 가중치 {WEIGHTS_GB:.0f}GB 보다 작습니다.\n"
+                f"  선택지:\n"
+                f"   1) --headroom-gb 0.8  로 마진을 줄인다 (OOM 위험 증가)\n"
+                f"   2) --allow-cpu-offload 로 일부 층을 CPU 로 넘긴다 (매우 느림, 구조 검증용)\n"
+                f"   3) 더 빈 GPU 를 기다린다 (24GB 한 장이면 --gpu N 으로 충분)\n"
+                f"   4) --device cpu 로 CPU 에서만 돌린다 (Stage 2 구조 검증에는 충분)"
+            )
+            if not cpu_offload:
+                raise RuntimeError(msg)
+            print("[shard ] !! " + msg.replace("\n", "\n[shard ] !! "))
+        elif total < WEIGHTS_GB + 1.5:
+            print("[shard ] !! 여유가 매우 빠듯합니다. OOM 이 나면 --allow-cpu-offload 를 붙이세요.")
         try:
             model = AutoModelForVision2Seq.from_pretrained(
                 path, device_map="auto", max_memory=mm, **common
@@ -150,6 +179,13 @@ def load_openvla(
                 first = v
         dev = torch.device(first)
     else:
+        if device != "cpu":
+            free, _ = torch.cuda.mem_get_info(int(device.split(":")[1]))
+            if free / 1e9 < WEIGHTS_GB + 1.0:
+                raise RuntimeError(
+                    f"{device} 의 여유가 {free/1e9:.1f}GB 인데 가중치만 {WEIGHTS_GB:.0f}GB 필요합니다.\n"
+                    f"  → 더 빈 GPU 를 쓰거나, 두 장을 묶으세요:  --gpus a,b"
+                )
         model = AutoModelForVision2Seq.from_pretrained(path, **common).to(device)
         dev = torch.device(device)
 

@@ -74,15 +74,51 @@ def c_torch_numpy():
     return f"torch {torch.__version__}"
 
 
+@check("CUDA 드라이버 ↔ torch 빌드")
+def c_driver():
+    """torch 의 CUDA 빌드가 드라이버보다 높으면 실행 시점에 죽습니다.
+
+        RuntimeError: The NVIDIA driver on your system is too old (found version 11080)
+
+    11080 = 드라이버가 지원하는 CUDA API 11.8 이라는 뜻입니다.
+    torch cu121 은 드라이버 525 이상이 필요하므로, 구형 드라이버면 cu118 빌드를 써야 합니다.
+    """
+    import subprocess
+    import torch
+
+    built = torch.version.cuda or "?"
+    try:
+        drv = subprocess.run(
+            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip().splitlines()[0].strip()
+    except Exception:  # noqa: BLE001
+        drv = "?"
+
+    major = int(drv.split(".")[0]) if drv[:1].isdigit() else 0
+    need = "cu121" if major >= 525 else "cu118"
+    have = "cu121" if built.startswith("12") else "cu118" if built.startswith("11") else built
+
+    assert have == need or (need == "cu121"), (
+        f"드라이버 {drv} (CUDA {'12.x' if major >= 525 else '11.x'} 까지) 인데 "
+        f"torch 는 {built} 빌드입니다.\n"
+        f"    조치: pip install torch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0 "
+        f"--index-url https://download.pytorch.org/whl/{need} --force-reinstall"
+    )
+    return f"드라이버 {drv}, torch CUDA {built} ({have})"
+
+
 @check("CUDA")
 def c_cuda(gpu: int):
     import torch
     assert torch.cuda.is_available(), "CUDA 를 못 찾았습니다"
     n = torch.cuda.device_count()
     assert gpu < n, f"GPU {gpu} 요청했으나 보이는 GPU 는 {n}개"
+    # get_device_name 은 CUDA 를 실제로 초기화합니다 — 드라이버가 낮으면 여기서 죽습니다
+    name = torch.cuda.get_device_name(gpu)
     free, total = torch.cuda.mem_get_info(gpu)
-    note = "" if free > 18e9 else "  ← 여유 부족 경고 (7B bf16 은 ~16GB 필요)"
-    return f"{n}장, cuda:{gpu} {torch.cuda.get_device_name(gpu)} 여유 {free/1e9:.1f}/{total/1e9:.1f}GB{note}"
+    note = "" if free > 18e9 else "  ← 여유 부족 경고 (7B bf16 은 18~20GB 필요)"
+    return f"{n}장, cuda:{gpu} {name} 여유 {free/1e9:.1f}/{total/1e9:.1f}GB{note}"
 
 
 @check("opencv < 5")
@@ -114,8 +150,19 @@ def c_misc():
 
 @check("libero 패키지")
 def c_libero():
+    """LIBERO 최상위는 __init__.py 가 없는 **namespace package** 입니다.
+    그래서 libero.__file__ 이 None 이고, dirname(None) 은 TypeError 를 냅니다.
+    __path__ 로 폴백해야 합니다."""
+    # !! LIBERO 디렉토리 안에서 import 하면 설치 여부와 무관하게 통과합니다(거짓 통과).
+    #    검증 스크립트는 보통 프로젝트 루트에서 도니 문제없지만, 혹시를 대비해 경고합니다.
     import libero
-    return os.path.dirname(libero.__file__)
+    loc = getattr(libero, "__file__", None)
+    if loc:
+        return os.path.dirname(loc)
+    paths = list(getattr(libero, "__path__", []))
+    if paths:
+        return f"{paths[0]}  (namespace package)"
+    return "(namespace package, 경로 불명)"
 
 
 @check("libero benchmark 목록")
@@ -214,6 +261,7 @@ def main() -> int:
     c_python()
     c_numpy()
     c_torch_numpy()
+    c_driver()
     c_cuda(args.gpu)
     c_cv2()
     c_transformers()
@@ -242,6 +290,8 @@ def main() -> int:
             print("  3) 재발 방지 — pip 이 다시 못 올리게 제약을 걸어 두세요:")
             print("       export PIP_CONSTRAINT=$(pwd)/constraints.txt")
             print("     (이걸 걸어두면 이후 어떤 pip 설치도 numpy 를 2.x 로 못 올립니다)")
+        if any("드라이버" in n for n in names):
+            print("  0) torch CUDA 빌드를 드라이버에 맞추기 (위 메시지의 조치 명령 그대로)")
         if any("렌더링" in n for n in names):
             print("  4) EGL 확인:  ldconfig -p | grep libEGL")
         print("\n환경을 처음부터 다시 만들 필요는 없습니다. 위 순서면 복구됩니다.")

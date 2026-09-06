@@ -171,6 +171,12 @@ def apply_overrides(mcfg: dict, args) -> dict:
         mcfg["path"] = args.model
     if getattr(args, "unnorm_key", None):
         mcfg["unnorm_key"] = args.unnorm_key
+    if getattr(args, "headroom_gb", None) is not None:
+        mcfg["headroom_gb"] = float(args.headroom_gb)
+    mcfg.setdefault("headroom_gb", 1.5)
+    if getattr(args, "allow_cpu_offload", False):
+        mcfg["cpu_offload"] = True
+    mcfg.setdefault("cpu_offload", False)
 
     # MuJoCo(EGL) 렌더링도 같은 GPU 로. LIBERO 환경 생성 전에만 설정되면 됩니다.
     idx = device_index(mcfg["device"])

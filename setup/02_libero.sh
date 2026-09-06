@@ -12,7 +12,10 @@ set -euo pipefail
 # --- 설치 전 공통 설정 --------------------------------------------------
 # NVIDIA NGC pip 미러가 /etc/pip.conf 에 박혀 있으면 패키지마다 DNS 5회 재시도가
 # 걸려 설치가 멈춘 것처럼 보입니다. 환경변수가 설정파일보다 우선하므로 여기서 비웁니다.
-export PIP_EXTRA_INDEX_URL=""
+# !! 빈 문자열("")은 pip 이 "설정 안 됨"으로 보고 /etc/pip.conf 값을 그대로 씁니다.
+#    (PIP_RETRIES 는 먹히는데 이것만 안 먹는 이유입니다)
+#    pypi.org 를 명시적으로 넣어 NGC 미러를 **덮어씁니다**.
+export PIP_EXTRA_INDEX_URL="https://pypi.org/simple"
 export PIP_RETRIES=2
 export PIP_TIMEOUT=10
 
@@ -32,7 +35,12 @@ echo "[pip] PIP_CONSTRAINT=${PIP_CONSTRAINT}"
 ENV_NAME="${ENV_NAME:-vlamod}"
 # shellcheck disable=SC1091
 source "$(conda info --base)/etc/profile.d/conda.sh"
+conda env list | awk '{print $1}' | grep -qx "${ENV_NAME}" || {
+  echo "  !! conda 환경 '${ENV_NAME}' 이 없습니다. setup/01_env.sh 를 먼저 실행하세요."
+  exit 1
+}
 conda activate "${ENV_NAME}"
+echo "  python: $(which python)"
 
 echo "[1/4] LIBERO 클론 + 설치"
 mkdir -p "${HOME}/third_party"
@@ -42,12 +50,33 @@ if [ ! -d LIBERO ]; then
 fi
 cd LIBERO
 pip install -e .
-python -c "import libero" 2>/dev/null || {
-  echo "  !! LIBERO 패키지가 import 되지 않습니다. 위 pip 출력을 확인하세요."
+
+# !! 검증은 반드시 **LIBERO 디렉토리 밖에서** 해야 합니다.
+#    안에서 하면 설치된 패키지가 아니라 현재 폴더의 libero/ 를 import 해서
+#    설치가 실패해도 통과합니다(거짓 통과).
+if ! (cd "${HOME}" && python -c "import libero" 2>/dev/null); then
+  echo "  editable 설치가 밖에서 안 잡힙니다. compat 모드로 재시도합니다."
+  echo "  (LIBERO 최상위는 namespace package 라 setuptools strict editable 과 충돌합니다)"
+  pip install -e . --config-settings editable_mode=compat
+fi
+(cd "${HOME}" && python -c "import libero" 2>/dev/null) || {
+  echo "  !! LIBERO 를 프로젝트 밖에서 import 할 수 없습니다."
   echo "  !! (EGL 문제가 아니라 설치 문제입니다)"
+  echo "  !! 임시 우회:  export PYTHONPATH=\"${HOME}/third_party/LIBERO:\$PYTHONPATH\""
   exit 1
 }
-echo "  OK: $(python -c 'import libero, os; print(os.path.dirname(libero.__file__))')"
+# LIBERO 최상위는 __init__.py 가 없는 namespace package 라 __file__ 이 None 입니다.
+# os.path.dirname(None) 은 TypeError 를 내므로 __path__ 로 폴백합니다.
+(cd "${HOME}" && python - <<'PYLOC'
+import libero, os
+loc = getattr(libero, "__file__", None)
+if loc:
+    print("  OK:", os.path.dirname(loc))
+else:
+    paths = list(getattr(libero, "__path__", []))
+    print("  OK:", paths[0] if paths else "(namespace package, 경로 불명)")
+PYLOC
+)
 
 echo "[2/4] OpenVLA 쪽 LIBERO 의존성"
 cd "${HOME}/third_party/openvla"
@@ -118,7 +147,11 @@ echo ""
 echo "참고: LIBERO 가 물어본 datasets 경로는 **시연 HDF5(학습용)** 저장소입니다."
 echo "      저희는 사전학습 체크포인트로 rollout 만 하므로 받지 않아도 됩니다."
 echo "      (필요한 bddl_files / init_files 는 저장소에 포함돼 있습니다)"
+echo "!! 이 스크립트의 conda activate 는 부모 셸로 넘어가지 않습니다."
+echo "!! python 명령을 직접 치기 전에 한 번 실행하세요:"
+echo "     conda activate ${ENV_NAME}"
+echo ""
 echo "쉘 rc 파일에 아래를 추가해 두세요:"
 echo '  export MUJOCO_GL=egl'
 echo '  export PYOPENGL_PLATFORM=egl'
-echo '  export PIP_EXTRA_INDEX_URL=""'
+echo '  export PIP_EXTRA_INDEX_URL="https://pypi.org/simple"'

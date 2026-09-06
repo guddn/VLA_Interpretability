@@ -8,6 +8,7 @@ VLA(OpenVLA)에서 **action token 이 image token 과 language token 을 어떤 
 | [`docs/00_research_plan.md`](docs/00_research_plan.md) | 문제의식, 선행연구 지도, 예상되는 반박과 방어 |
 | [`docs/01_module_reference.md`](docs/01_module_reference.md) | 각 파일의 목적과 설계 근거 |
 | [`docs/02_runbook.md`](docs/02_runbook.md) | 단계별 실행 순서와 통과 기준(Gate) |
+| [`docs/03_new_server_setup.md`](docs/03_new_server_setup.md) | **새 서버에 처음부터 세팅** (conda 부터) |
 
 ## 검증하는 가설
 
@@ -127,7 +128,21 @@ python scripts/01_smoke_forward.py --gpus 0,6      # A4000 16GB × 2 = 32GB
 - 층 경계마다 GPU 간 전송이 생겨 **느려집니다.** 한 장에 들어가면 `--gpu` 를 쓰세요.
 - 상한은 각 GPU 의 **현재 여유**에서 1.5GB 를 뺀 값으로 자동 계산합니다.
   고정값을 쓰면 남의 작업이 늘었을 때 OOM 이 나기 때문입니다.
-- CPU 오프로드는 금지해 두었습니다 (`cpu: 0GiB`). 조용히 100배 느려지는 것을 막습니다.
+- CPU 오프로드는 기본 금지 (`cpu: 0GiB`). 조용히 100배 느려지는 것을 막습니다.
+- 로드 전에 **사용 가능 합계 vs 가중치 15GB** 를 비교해, 모자라면 선택지를 안내하고 멈춥니다.
+
+**메모리가 빠듯할 때 쓰는 두 인자:**
+
+| 인자 | 효과 | 주의 |
+|---|---|---|
+| `--headroom-gb 0.8` | GPU 당 안전 마진을 1.5 → 0.8GB 로 축소 | OOM 위험 증가 |
+| `--allow-cpu-offload` | 못 올린 층을 CPU 로 | **매우 느림.** 구조 검증(Stage 2)용으로만 |
+
+```bash
+# 16GB 두 장(여유 7.7 + 10.1 = 17.8GB)에서 억지로 돌리는 예
+python scripts/01_smoke_forward.py --gpus 0,6 --headroom-gb 0.8
+python scripts/01_smoke_forward.py --gpus 0,6 --headroom-gb 0.8 --allow-cpu-offload
+```
 
 ### 멀티 GPU 서버의 함정 두 가지
 
@@ -229,7 +244,7 @@ action query s, layer l, head h 에 대해:
    ```
 
 3. **NGC pip 미러.** `/etc/pip.conf` 에 `pypi.ngc.nvidia.com` 이 박혀 있으면 패키지마다
-   DNS 5회 재시도가 걸려 설치가 **멈춘 것처럼** 보입니다. `export PIP_EXTRA_INDEX_URL=""`.
+   DNS 5회 재시도가 걸려 설치가 **멈춘 것처럼** 보입니다. `export PIP_EXTRA_INDEX_URL="https://pypi.org/simple"`.
 
 4. **transformers 4.40.x 고정.** 상위 버전은 attention mask 전달 규약이 바뀌어
    `intervene.py` 의 knockout 훅이 깨집니다.
@@ -272,6 +287,8 @@ VERIFY_TRACE=1 python setup/04_verify.py   # 스택 트레이스까지
 | 증상 | 원인 / 조치 |
 |---|---|
 | `RuntimeError: Numpy is not available` | numpy 2.x. `PIP_CONSTRAINT` 걸고 `pip install 'numpy<2' --force-reinstall` |
+| `The NVIDIA driver ... is too old (11080)` | 드라이버가 CUDA 11.8 까지. torch 를 **cu118 빌드**로 재설치 (`--index-url .../whl/cu118`) |
+| LIBERO 폴더 밖에서만 `No module named 'libero'` | namespace package editable 문제. `pip install -e . --config-settings editable_mode=compat` |
 | `attentions 가 None` | eager 아님. `configs/*.yaml` 의 `attn_implementation` 확인 |
 | `4D attention mask 를 기대했는데 ND` | transformers 버전. 4.40.x 로 |
 | `ModuleNotFoundError: vlamod.device` | 서버 전송 누락. PyCharm Deployment 는 수동 업로드 필요 |

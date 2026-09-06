@@ -51,6 +51,10 @@ def main() -> int:
                     help="HuggingFace 캐시 루트. config 의 env.hf_home 을 덮어씀")
     ap.add_argument("--gpu", type=int, default=None, metavar="N",
                     help="사용할 GPU 번호 (예: --gpu 3)")
+    ap.add_argument("--headroom-gb", type=float, default=None, metavar="G",
+                    help="--gpus 분할 시 GPU 당 안전 마진(GB). 기본 1.5. 빠듯하면 0.8")
+    ap.add_argument("--allow-cpu-offload", action="store_true",
+                    help="GPU 에 다 못 올리면 일부 층을 CPU 로. **매우 느림** — 구조 검증용")
     ap.add_argument("--gpus", default=None, metavar="0,1",
                     help="여러 GPU 에 모델을 분할 로드 (예: --gpus 0,1). "
                          "한 장에 안 들어갈 때 씁니다. 수치는 단일 GPU 와 동일합니다.")
@@ -72,6 +76,8 @@ def main() -> int:
         dtype=mcfg["dtype"],
         attn_implementation=mcfg["attn_implementation"],
         gpus=mcfg.get("gpus"),
+        headroom_gb=mcfg.get("headroom_gb", 1.5),
+        cpu_offload=mcfg.get("cpu_offload", False),
     )
     report_gpu(mcfg["device"], mcfg.get("gpus"))
     print(f"  path      : {vla.path}")
