@@ -55,6 +55,10 @@ def main() -> int:
                     help="--gpus 분할 시 GPU 당 안전 마진(GB). 기본 1.5. 빠듯하면 0.8")
     ap.add_argument("--allow-cpu-offload", action="store_true",
                     help="GPU 에 다 못 올리면 일부 층을 CPU 로. **매우 느림** — 구조 검증용")
+    ap.add_argument("--egl-device", type=int, default=None, metavar="E",
+                    help="렌더링(EGL) 디바이스 번호. **CUDA 번호와 다른 체계**이고 "
+                         "보통 0 하나뿐입니다. 미지정이면 자동 판정. "
+                         "목록은 setup/07_egl_probe.py 로 확인하세요")
     ap.add_argument("--gpus", default=None, metavar="0,1",
                     help="여러 GPU 에 모델을 분할 로드 (예: --gpus 0,1). "
                          "한 장에 안 들어갈 때 씁니다. 수치는 단일 GPU 와 동일합니다.")

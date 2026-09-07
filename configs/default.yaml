@@ -6,19 +6,14 @@
 # 처럼 쓰세요. 재현 시 "어떤 config 로 돌렸는지"만 기록하면 됩니다.
 
 env:
-  # HuggingFace 캐시 루트. null 이면 시스템 기본(~/.cache/huggingface).
-  # 모델 파일은 <hf_home>/hub/models--openvla--... 아래에 들어갑니다.
-  # !! 다운로드와 로드 **양쪽** 에 쓰입니다. 여기만 바꾸면 둘 다 따라갑니다.
+  # HuggingFace 캐시 루트.
   hf_home: "~/shared/hdd_ext/nvme1/kimhyeongwoo"
 
   # headless 렌더링 (LIBERO/MuJoCo). 서버면 egl, 로컬 GUI 면 glfw.
   mujoco_gl: "egl"
   pyopengl_platform: "egl"
 
-  # !! GPU 번호 체계. CUDA 의 기본값은 FASTEST_FIRST 라서, 카드 모델이 섞인
-  #    서버에서는 torch 의 cuda:N 이 nvidia-smi / nvtop 의 GPU N 과 다릅니다.
-  #    PCI_BUS_ID 로 두면 nvtop 에서 본 번호를 그대로 --gpu 에 쓸 수 있습니다.
-  #    (null 로 두면 시스템 기본 = FASTEST_FIRST)
+  # !! GPU 번호 체계
   cuda_device_order: "PCI_BUS_ID"
 
 model:

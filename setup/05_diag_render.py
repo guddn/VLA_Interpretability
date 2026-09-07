@@ -43,7 +43,11 @@ def die(e: BaseException) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/default.yaml")
-    ap.add_argument("--gpu", type=int, default=0)
+    ap.add_argument("--gpu", type=int, default=0,
+                    help="(참고용) torch GPU 번호. 이 스크립트는 모델을 안 올립니다")
+    ap.add_argument("--egl-device", type=int, default=None, metavar="E",
+                    help="렌더링(EGL) 디바이스 번호. **CUDA 번호와 다른 체계**입니다. "
+                         "미지정이면 자동 판정 (setup/07_egl_probe.py 로 목록 확인)")
     ap.add_argument("--suite", default="spatial")
     ap.add_argument("--task-id", type=int, default=0)
     ap.add_argument("--resolution", type=int, default=256)
@@ -55,13 +59,17 @@ def main() -> int:
         cfg = yaml.safe_load(open(args.config, encoding="utf-8")) or {}
     except Exception:  # noqa: BLE001
         cfg = {}
-    from vlamod.device import apply_env
+    from vlamod.device import apply_env, probe_egl_devices, resolve_egl_device
     apply_env(cfg, args)
     os.environ.setdefault("MUJOCO_GL", "egl")
     os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
-    os.environ["MUJOCO_EGL_DEVICE_ID"] = str(args.gpu)
+    # !! EGL 번호는 CUDA 번호와 다른 체계입니다. 그대로 넣으면 robosuite 가 죽습니다.
+    n_egl = probe_egl_devices()
+    egl_id, why = resolve_egl_device(args.gpu, args.egl_device)
+    os.environ["MUJOCO_EGL_DEVICE_ID"] = str(egl_id)
     os.makedirs("outputs", exist_ok=True)
-    print(f"[device] render(EGL)=cuda:{args.gpu}")
+    print(f"[device] torch=cuda:{args.gpu} (미사용)  "
+          f"render=egl:{egl_id}  EGL 디바이스 수={n_egl}  ({why})")
 
     env = None
     try:
@@ -117,6 +125,29 @@ def main() -> int:
                                  camera_heights=args.resolution,
                                  camera_widths=args.resolution)
         print("  생성 성공")
+
+        # !! 여기가 렌더러를 확인하는 **가장 확실한 지점**입니다.
+        #    robosuite 가 이미 EGL 컨텍스트를 만들어 current 로 걸어 두었으므로,
+        #    지금 glGetString 을 부르면 실제로 쓰이는 렌더러가 나옵니다.
+        try:
+            from OpenGL import GL
+            for nm, const in (("GL_VENDOR", GL.GL_VENDOR),
+                              ("GL_RENDERER", GL.GL_RENDERER),
+                              ("GL_VERSION", GL.GL_VERSION)):
+                s = GL.glGetString(const)
+                s = s.decode() if isinstance(s, bytes) else str(s)
+                print(f"    {nm:12s} = {s}")
+                if nm == "GL_RENDERER":
+                    low = s.lower()
+                    if any(k in low for k in ("llvmpipe", "softpipe", "swrast")):
+                        print("    ★ 소프트웨어 렌더링(CPU)입니다. 동작하지만 느립니다.")
+                    elif "nvidia" in low:
+                        print("    ✓ NVIDIA GPU 렌더링입니다.")
+                    else:
+                        print("    ? 판별 불가 — 위 문자열을 그대로 보고하세요.")
+        except Exception as e:  # noqa: BLE001
+            print(f"    GL_RENDERER 조회 실패: {type(e).__name__}: {e}")
+
         sim = getattr(getattr(env, "env", None), "sim", None)
         if sim is not None:
             nq, nv = sim.model.nq, sim.model.nv
@@ -139,13 +170,24 @@ def main() -> int:
         obs = env.set_init_state(init_states[0])
         print(f"  OK  obs keys = {sorted(obs.keys())[:8]} ...")
 
-        step(9, "env.step() × 5 (물리 안정화)")
+        step(9, "env.step() × 5 (물리 안정화) + 렌더 속도 측정")
+        import time
         dummy = np.array([0.0] * 6 + [-1.0], dtype=np.float32)
         print(f"  action_dim(env) = {getattr(env.env, 'action_dim', '?')}  "
               f"보내는 길이 = {len(dummy)}")
+        t0 = time.perf_counter()
         for i in range(5):
             obs, _, _, _ = env.step(dummy)
-        print("  OK")
+        per = (time.perf_counter() - t0) / 5
+        print(f"  OK   step+render 평균 {per * 1000:.1f} ms/step")
+        # !! 소프트웨어 렌더링(llvmpipe)이면 여기가 수십~수백 ms 로 뜁니다.
+        #    다만 OpenVLA 7B forward 가 스텝당 1~3초이므로, 수백 ms 라도
+        #    전체 실험 시간을 지배하지는 않습니다. 판단 근거로만 쓰세요.
+        if per > 0.15:
+            print("  ※ 느립니다 — 소프트웨어 렌더링일 가능성이 큽니다.")
+            print("    그래도 모델 forward(스텝당 1~3초)가 더 비싸므로 병목은 아닙니다.")
+        else:
+            print("  ※ 충분히 빠릅니다.")
 
         # ---------------------------------------------------------------
         step(10, "프레임 추출 + 저장")

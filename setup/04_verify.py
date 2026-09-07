@@ -79,6 +79,24 @@ def c_python():
     return f"{v.major}.{v.minor}.{v.micro}{note}"
 
 
+@check("PIP_CONSTRAINT")
+def c_constraint():
+    """이게 안 걸려 있으면 다음 pip 설치가 numpy 를 다시 2.x 로 올립니다.
+
+    yaml(configs) 로는 해결되지 않습니다 — 그건 파이썬 프로세스 안의 설정이고
+    pip 은 셸에서 따로 돌기 때문입니다. conda 의 activate.d 에 박는 것이 정답이고,
+    setup/01_env.sh 가 자동으로 등록합니다.
+    """
+    p = os.environ.get("PIP_CONSTRAINT")
+    assert p, (
+        "설정되지 않았습니다. 다음 pip 설치가 numpy 를 2.x 로 올릴 수 있습니다.\n"
+        "    영구 해결: bash setup/01_env.sh 를 한 번 더 돌리면 conda activate.d 에 등록합니다\n"
+        "    임시 해결: export PIP_CONSTRAINT=$(pwd)/constraints.txt"
+    )
+    assert os.path.isfile(p), f"파일이 없습니다: {p}  (프로젝트를 옮기셨나요?)"
+    return p
+
+
 @check("numpy < 2")
 def c_numpy():
     import numpy
@@ -269,6 +287,9 @@ def main() -> int:
                          "EGL 렌더링은 첫 번째 GPU 에 붙습니다")
     ap.add_argument("--headroom-gb", type=float, default=1.5, metavar="G",
                     help="--gpus 판정 시 GPU 당 안전 마진(GB). 기본 1.5")
+    ap.add_argument("--egl-device", type=int, default=None, metavar="E",
+                    help="렌더링(EGL) 디바이스 번호. **CUDA 번호와 다른 체계**입니다. "
+                         "미지정이면 자동 판정 (setup/07_egl_probe.py 로 목록 확인)")
     ap.add_argument("--hf-home", default=None,
                     help="HuggingFace 캐시 루트. config 의 env.hf_home 을 덮어씀")
     ap.add_argument("--skip-render", action="store_true")
@@ -321,20 +342,24 @@ def main() -> int:
     if not gpu_list:
         gpu_list = [0 if args.gpu is None else args.gpu]
 
-    # !! MuJoCo(EGL) 는 PyTorch 와 **독립적으로** GPU 를 고릅니다.
-    #    이걸 안 맞추면 --gpu 4 를 줘도 렌더링은 0번에서 일어납니다.
-    #    OffScreenRenderEnv 생성 전에만 설정되면 되므로 여기가 맞는 위치입니다.
+    # !! MuJoCo(EGL) 는 PyTorch 와 **독립적으로** GPU 를 고르고, 디바이스 목록도
+    #    완전히 별개입니다 (GPU 10장인데 EGL 은 1개만 열거하는 서버가 실제로 있습니다).
+    #    CUDA 번호를 그대로 넣으면 robosuite 가 범위 초과로 죽습니다.
+    from vlamod.device import probe_egl_devices, resolve_egl_device
     os.environ.setdefault("MUJOCO_GL", "egl")
     os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
-    os.environ["MUJOCO_EGL_DEVICE_ID"] = str(gpu_list[0])
+    n_egl = probe_egl_devices()
+    egl_id, why = resolve_egl_device(gpu_list[0], args.egl_device)
+    os.environ["MUJOCO_EGL_DEVICE_ID"] = str(egl_id)
     shard = f"  (분할 {gpu_list})" if len(gpu_list) > 1 else ""
     print(f"[device] 검사 대상 cuda:{gpu_list[0]}{shard}  "
-          f"render(EGL)=cuda:{gpu_list[0]}")
+          f"render=egl:{egl_id}  EGL 디바이스 수={n_egl}  ({why})")
 
     os.makedirs("outputs", exist_ok=True)
 
     print("\n=== Stage 1 검증 " + "=" * 48)
     c_python()
+    c_constraint()
     c_numpy()
     c_torch_numpy()
     c_driver()

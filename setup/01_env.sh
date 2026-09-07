@@ -128,6 +128,41 @@ assert transformers.__version__.startswith("4.40"), \
     "transformers 4.40.x 가 아닙니다. knockout 훅이 깨질 수 있습니다."
 PY
 
+# ---------------------------------------------------------------------------
+# PIP_CONSTRAINT 를 conda 환경에 **영구히** 박습니다.
+#
+# 왜 여기인가:
+#   - configs/default.yaml 로는 안 됩니다. 그건 파이썬 프로세스 안에서만 유효한데
+#     pip 은 셸에서 따로 돕니다.
+#   - ~/.bashrc 는 서버·프로젝트가 바뀌면 오염됩니다.
+#   - conda 의 activate.d 는 `conda activate vlamod` 할 때만 켜지고
+#     `conda deactivate` 하면 원래대로 돌아갑니다. 범위가 정확히 맞습니다.
+# ---------------------------------------------------------------------------
+ENV_PREFIX="$(conda run -n "${ENV_NAME}" python -c 'import sys,os;print(sys.prefix)' 2>/dev/null || true)"
+if [ -n "${ENV_PREFIX}" ] && [ -d "${ENV_PREFIX}" ]; then
+  mkdir -p "${ENV_PREFIX}/etc/conda/activate.d" "${ENV_PREFIX}/etc/conda/deactivate.d"
+  cat > "${ENV_PREFIX}/etc/conda/activate.d/vlamod_pip.sh" <<EOF
+# vlamod: pip 이 numpy 를 2.x 로 올리는 것을 원천 차단합니다.
+# setup/01_env.sh 가 자동 생성했습니다. 프로젝트를 옮기면 경로를 고치세요.
+export VLAMOD_OLD_PIP_CONSTRAINT="\${PIP_CONSTRAINT:-}"
+export PIP_CONSTRAINT="${REPO_ROOT}/constraints.txt"
+EOF
+  cat > "${ENV_PREFIX}/etc/conda/deactivate.d/vlamod_pip.sh" <<'EOF'
+if [ -n "${VLAMOD_OLD_PIP_CONSTRAINT:-}" ]; then
+  export PIP_CONSTRAINT="${VLAMOD_OLD_PIP_CONSTRAINT}"
+else
+  unset PIP_CONSTRAINT
+fi
+unset VLAMOD_OLD_PIP_CONSTRAINT
+EOF
+  echo "[pip] conda activate 시 PIP_CONSTRAINT 자동 설정하도록 등록했습니다:"
+  echo "      ${ENV_PREFIX}/etc/conda/activate.d/vlamod_pip.sh"
+  echo "      → 이제 export 를 매번 치지 않아도 됩니다 (다음 activate 부터 적용)"
+else
+  echo "[pip] !! conda 환경 경로를 못 찾아 activate.d 등록을 건너뜁니다."
+  echo "        수동 pip 설치 전에는 export PIP_CONSTRAINT=... 를 직접 하세요."
+fi
+
 echo ""
 echo "완료. 다음:"
 echo "  bash setup/02_libero.sh"

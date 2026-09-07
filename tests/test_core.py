@@ -232,7 +232,10 @@ def test_apply_overrides_gpu_flag(monkeypatch):
     c = _cfg()
     apply_overrides(c, SimpleNamespace(gpu=3, device=None, model=None, unnorm_key=None))
     assert c["device"] == "cuda:3"
-    assert os.environ["MUJOCO_EGL_DEVICE_ID"] == "3"
+    # !! EGL 번호는 CUDA 번호와 **다른 체계**이므로 3 이 그대로 들어가면 안 됩니다.
+    #    EGL 을 못 열거하는 환경(CI/컨테이너)에서는 0 으로 폴백합니다.
+    assert os.environ["MUJOCO_EGL_DEVICE_ID"].isdigit()
+    assert c["egl_device"] == int(os.environ["MUJOCO_EGL_DEVICE_ID"])
 
 
 def test_apply_overrides_device_string(monkeypatch):
@@ -272,13 +275,36 @@ def test_apply_overrides_detects_visible_devices_conflict(monkeypatch):
         apply_overrides(_cfg(), SimpleNamespace(gpu=3, device=None, model=None, unnorm_key=None))
 
 
-def test_cpu_does_not_set_egl_device(monkeypatch):
+def test_cpu_still_sets_egl_device(monkeypatch):
+    """모델이 CPU 여도 LIBERO 렌더링은 여전히 EGL 을 씁니다.
+
+    (예전 버전은 cpu 일 때 MUJOCO_EGL_DEVICE_ID 를 아예 안 걸었는데,
+     그러면 렌더링이 EGL 기본 디바이스로 조용히 새어 나갑니다.)
+    """
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     monkeypatch.delenv("MUJOCO_EGL_DEVICE_ID", raising=False)
     c = _cfg()
     apply_overrides(c, SimpleNamespace(gpu=None, device="cpu", model=None, unnorm_key=None))
     assert c["device"] == "cpu"
-    assert "MUJOCO_EGL_DEVICE_ID" not in os.environ
+    assert os.environ["MUJOCO_EGL_DEVICE_ID"].isdigit()
+
+
+def test_egl_device_explicit_wins(monkeypatch):
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    c = _cfg()
+    apply_overrides(c, SimpleNamespace(gpu=3, device=None, model=None,
+                                       unnorm_key=None, egl_device=1))
+    assert os.environ["MUJOCO_EGL_DEVICE_ID"] == "1"
+    assert c["egl_device"] == 1
+
+
+def test_resolve_egl_device_rules():
+    from vlamod.device import resolve_egl_device
+    # 명시 지정이 최우선
+    assert resolve_egl_device(8, 2)[0] == 2
+    # EGL 을 못 열거하면 0
+    idx, why = resolve_egl_device(8, None)
+    assert isinstance(idx, int) and idx >= 0 and why
 
 
 # -------------------------------------------------------------- apply_env

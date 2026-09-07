@@ -18,12 +18,27 @@ VLA(OpenVLA)에서 **action token 이 image token 과 language token 을 어떤 
 두 가설 모두 **어느 쪽 결과가 나와도 발표거리**가 됩니다.
 
 ---
+## setup 파일 기능
+
+설치 (순서대로 1회)
+
+- `01_env.sh`: conda env + torch(드라이버 맞춰 cu118/cu121) + OpenVLA 설치
+- `02_libero.sh`: LIBERO 설치 + numpy/opencv 버전 되돌리기
+- `03_download_ckpt.py`: 체크포인트 다운로드 (~15GB)
+- `04_verify.py`: 설치 상태 13개 항목 점검 (EGL 실렌더링 포함)
+
+진단 (`04_verify.py` 실패 시)
+
+- `05_diag_render.py`: 렌더링 실패 지점을 10단계로 특정 + 속도 측정
+- `06_gpu_map.py`: nvidia-smi / torch / EGL 의 GPU 번호 체계 대조
+- `07_egl_probe.py`: EGL 디바이스 수·벤더, NVIDIA GL 스택 유무
+- `08_diag_robosuite.py`: robosuite ↔ mujoco ↔ LIBERO 버전 정합성
 
 ## 빠른 시작
 
 ```bash
 # ── 노트북 (Windows) — 로직 검증만 ─────────────────────────────
-pytest -q tests/test_core.py                  # 52 passed 나와야 정상
+pytest -q tests/test_core.py                  # 58 passed 나와야 정상
 
 # ── 서버 (Linux + GPU) — 설치 ──────────────────────────────────
 export PIP_CONSTRAINT=$(pwd)/constraints.txt  # ★ 먼저. 아래 함정 2 참고
@@ -31,7 +46,7 @@ bash setup/01_env.sh                          # conda env "vlamod" + torch + Ope
 bash setup/02_libero.sh                       # LIBERO + robosuite/MuJoCo
 conda activate vlamod
 python setup/03_download_ckpt.py --suite spatial     # ~15GB
-python setup/04_verify.py --gpu 5             # ★ 11개 항목 상태 점검
+python setup/04_verify.py --gpu 5             # ★ 13개 항목 상태 점검
 python setup/04_verify.py --gpus 0,6          #   두 장에 나눠 쓸 예정이면 합계로 판정
 
 # ── 서버 — 실행 ────────────────────────────────────────────────
@@ -93,8 +108,8 @@ env:
 로드 직후 아래가 출력됩니다. **요청한 번호가 그대로 찍히는지 매번 확인하세요.**
 
 ```
-[env   ] HF_HOME=/home/…/kimhyeongwoo  MUJOCO_GL=egl
-[device] model=cuda:5  render(EGL)=5
+[env   ] HF_HOME=/home/…/kimhyeongwoo  MUJOCO_GL=egl  PYOPENGL_PLATFORM=egl  CUDA_DEVICE_ORDER=PCI_BUS_ID
+[device] model=cuda:5  render(EGL)=egl:0  (EGL 디바이스가 1개뿐 → 선택 불가)
 [model ] openvla/openvla-7b-finetuned-libero-spatial  unnorm_key=libero_spatial
 [gpu   ] cuda:5 NVIDIA RTX A5000  사용가능 23.7GB / 전체 24.0GB
 ```
@@ -145,13 +160,43 @@ python scripts/01_smoke_forward.py --gpus 0,6 --headroom-gb 0.8
 python scripts/01_smoke_forward.py --gpus 0,6 --headroom-gb 0.8 --allow-cpu-offload
 ```
 
-### 멀티 GPU 서버의 함정 두 가지
+### 멀티 GPU 서버의 함정 네 가지
 
-**① PyTorch 와 MuJoCo 는 GPU 를 따로 고릅니다.** 모델을 `cuda:5` 에 올려도 LIBERO 의
-EGL 렌더링은 기본적으로 0번을 씁니다. `--gpu` 를 쓰면 `MUJOCO_EGL_DEVICE_ID` 를
-같은 번호로 맞춰 줍니다. 출력의 `render(EGL)=` 이 `model=` 과 같은지 확인하세요.
+**① GPU 번호 체계가 세 가지입니다.** `nvidia-smi`/`nvtop` 은 PCI 순서, CUDA 의 기본은
+`FASTEST_FIRST`(성능순 재정렬), EGL 은 또 다른 목록입니다. 카드 모델이 섞인 서버에서는
+셋이 전부 어긋납니다. `configs/default.yaml` 의 `env.cuda_device_order: "PCI_BUS_ID"`
+가 torch 번호를 nvtop 과 맞춰 줍니다.
 
-**② `CUDA_VISIBLE_DEVICES` 와 섞어 쓰지 마세요.** 섞으면 번호가 0부터 재매핑됩니다.
+```bash
+python setup/06_gpu_map.py     # 세 체계를 나란히 비교하고 판정
+```
+
+**② EGL 디바이스 번호는 CUDA 번호가 아닙니다.** GPU 가 10장이어도 EGL 은 1개만
+열거할 수 있습니다. CUDA 번호를 그대로 넣으면 이렇게 죽습니다:
+
+```
+RuntimeError: The MUJOCO_EGL_DEVICE_ID environment variable must be
+an integer between 0 and 0 (inclusive), got 8.
+```
+
+`--gpu`(torch) 와 `--egl-device`(렌더링) 는 **별개 인자**입니다. 미지정이면 코드가
+EGL 목록을 실측해 자동 결정하고, 사유를 출력합니다.
+
+```bash
+python setup/07_egl_probe.py   # EGL 디바이스 수 / 벤더 / GPU인지 소프트웨어인지
+```
+
+**③ NVIDIA 드라이버의 그래픽 스택이 없을 수 있습니다.** CUDA(연산)만 설치된 서버가
+흔합니다. `ldconfig -p | grep libEGL` 에 `libEGL_nvidia` 가 없고
+`/usr/share/glvnd/egl_vendor.d/` 에 `50_mesa.json` 만 있으면 그 경우입니다.
+
+- **동작은 합니다.** Mesa 소프트웨어 렌더링(llvmpipe)으로 떨어집니다.
+- 렌더가 수백 ms 로 느려지지만, OpenVLA 7B forward 가 스텝당 1~3초라 **병목은 아닙니다.**
+- GPU 렌더링이 필요하면 관리자에게: 드라이버 설치 시 `--no-opengl-files` 를 빼거나
+  (`libEGL_nvidia.so` + `/usr/share/glvnd/egl_vendor.d/10_nvidia.json`),
+  컨테이너면 `NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics` 로 실행.
+
+**④ `CUDA_VISIBLE_DEVICES` 와 섞어 쓰지 마세요.** 섞으면 번호가 0부터 재매핑됩니다.
 코드가 이 상황을 감지해 에러를 냅니다.
 
 ### 체크포인트를 병렬로 (불변성 확인용)
@@ -188,18 +233,26 @@ vlamod/
   env_libero.py    LIBERO 얇은 래퍼
   viz.py           그림 (색맹 판별 검증 완료 3색)
 setup/
-  01_env.sh          conda + torch + OpenVLA
+  01_env.sh          conda + torch + OpenVLA (드라이버 보고 cu118/cu121 자동 선택)
   02_libero.sh       LIBERO + 버전 충돌 되돌리기 + 검증
   03_download_ckpt.py 체크포인트 (config 의 env.hf_home 사용)
-  04_verify.py       ★ 설치 없이 상태만 11개 항목 점검 (EGL 실렌더링 포함)
-                       --gpu N / --gpus 0,6 지원. EGL 렌더 GPU 도 함께 맞춥니다
+  04_verify.py       ★ 설치 없이 상태만 12개 항목 점검 (EGL 실렌더링 포함)
+                       --gpu N / --gpus 0,6 / --egl-device E
+  ── 아래는 04 가 실패했을 때만 쓰는 진단 도구 ──
+  05_diag_render.py  렌더링 실패를 10단계로 쪼개 어디서 죽는지 특정.
+                     GL_RENDERER(GPU/소프트웨어) 와 렌더 속도도 측정
+  06_gpu_map.py      nvidia-smi / torch / EGL 세 번호 체계 대조·판정
+  07_egl_probe.py    EGL 디바이스 수·벤더, NVIDIA GL 스택 존재 여부,
+                     root 없는 우회 가능 여부
+  08_diag_robosuite.py robosuite ↔ mujoco ↔ LIBERO 버전 정합성.
+                     "메시지 없는 AssertionError" 전용
 scripts/
   01_smoke_forward.py   Phase 0~1  구조 검증 7단계
   02_run_analysis.py    Phase 2~3  비율 + knockout KL 수집
   03_correlation.py     H2         상관 + 대조군 t-검정
   04_counterfactual.py  H1         지시 조건 4종 비교
   05_plots.py                      그림 4장
-tests/test_core.py      GPU 없이 도는 단위 테스트 52개
+tests/test_core.py      GPU 없이 도는 단위 테스트 58개
 ```
 
 ### 산출물
@@ -244,6 +297,10 @@ action query s, layer l, head h 에 대해:
    ```bash
    export PIP_CONSTRAINT=$(pwd)/constraints.txt
    ```
+   **매번 치기 싫으면** `setup/01_env.sh` 를 한 번 더 돌리세요. conda 환경의
+   `activate.d` 에 등록해서 `conda activate vlamod` 할 때 자동으로 걸립니다.
+   (`configs/*.yaml` 에 넣는 건 **효과가 없습니다.** 그건 파이썬 프로세스 안의
+   설정이고 pip 은 셸에서 따로 돕니다.) `04_verify.py` 가 이 항목을 점검합니다.
 
 3. **NGC pip 미러.** `/etc/pip.conf` 에 `pypi.ngc.nvidia.com` 이 박혀 있으면 패키지마다
    DNS 5회 재시도가 걸려 설치가 **멈춘 것처럼** 보입니다. `export PIP_EXTRA_INDEX_URL="https://pypi.org/simple"`.

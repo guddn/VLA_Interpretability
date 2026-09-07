@@ -167,6 +167,112 @@ def parse_gpus(value) -> list[int]:
     return out
 
 
+def egl_devices() -> list | None:
+    """EGL 디바이스 **핸들 목록**. 알 수 없으면 None.
+
+    !! `OpenGL.EGL.eglQueryDevicesEXT` 는 PyOpenGL 버전에 따라 **없습니다.**
+       (AttributeError: module 'OpenGL.EGL' has no attribute 'eglQueryDevicesEXT')
+       확장 심볼은 서브모듈에 있고, 위치도 버전마다 다릅니다.
+       그래서 알려진 경로를 순서대로 전부 시도합니다.
+    """
+    os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+
+    # 1) 확장 모듈 직접 import (가장 흔한 경로)
+    try:
+        from OpenGL.EGL.EXT.device_enumeration import eglQueryDevicesEXT  # noqa: PLC0415
+        return list(eglQueryDevicesEXT())
+    except Exception:  # noqa: BLE001
+        pass
+    # 2) device_base 의 헬퍼
+    try:
+        from OpenGL.EGL.EXT.device_base import egl_get_devices  # noqa: PLC0415
+        return list(egl_get_devices())
+    except Exception:  # noqa: BLE001
+        pass
+    # 3) 최상위 네임스페이스 (신버전 PyOpenGL)
+    try:
+        from OpenGL import EGL  # noqa: PLC0415
+        return list(EGL.eglQueryDevicesEXT())
+    except Exception:  # noqa: BLE001
+        pass
+    # 4) ctypes 로 직접
+    try:
+        import ctypes  # noqa: PLC0415
+        from OpenGL import EGL  # noqa: PLC0415
+        n = EGL.EGLint()
+        EGL.eglQueryDevicesEXT(0, None, ctypes.byref(n))
+        buf = (EGL.EGLDeviceEXT * n.value)()
+        EGL.eglQueryDevicesEXT(n.value, buf, ctypes.byref(n))
+        return list(buf)[: n.value]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def probe_egl_devices_via_robosuite() -> int | None:
+    """최후의 수단 — robosuite 자신에게 물어봅니다.
+
+    범위를 크게 벗어난 값을 주면 robosuite 가
+      "must be an integer between 0 and N (inclusive)"
+    라고 알려 줍니다. 그 N 을 파싱합니다.
+    우리가 실제로 타는 코드 경로와 **정확히 같은** 답이라는 게 장점입니다.
+    """
+    import re  # noqa: PLC0415
+    saved = os.environ.get("MUJOCO_EGL_DEVICE_ID")
+    try:
+        os.environ["MUJOCO_EGL_DEVICE_ID"] = "9999"
+        from robosuite.renderers.context.egl_context import (  # noqa: PLC0415
+            create_initialized_egl_device_display,
+        )
+        create_initialized_egl_device_display(device_id=9999)
+        return None
+    except RuntimeError as e:
+        m = re.search(r"between 0 and (\d+)", str(e))
+        return int(m.group(1)) + 1 if m else None
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        if saved is None:
+            os.environ.pop("MUJOCO_EGL_DEVICE_ID", None)
+        else:
+            os.environ["MUJOCO_EGL_DEVICE_ID"] = saved
+
+
+def probe_egl_devices() -> int | None:
+    """EGL 이 열거하는 디바이스 **개수**를 반환합니다. 알 수 없으면 None.
+
+    !! 이건 CUDA 디바이스 수와 전혀 다를 수 있습니다.
+       실제로 GPU 10장짜리 서버에서 EGL 은 1개만 열거하는 경우가 있습니다
+       (드라이버/컨테이너 구성, 또는 NVIDIA EGL 대신 Mesa 가 잡힌 경우).
+       그때 MUJOCO_EGL_DEVICE_ID 에 8 을 넣으면 robosuite 가 이렇게 죽습니다:
+
+         RuntimeError: The MUJOCO_EGL_DEVICE_ID environment variable must be
+         an integer between 0 and 0 (inclusive), got 8.
+
+    실패해도 예외를 올리지 않습니다 — 모르면 None 을 주고 호출부가 0 으로 갑니다.
+    """
+    devs = egl_devices()
+    if devs is not None:
+        return len(devs)
+    return probe_egl_devices_via_robosuite()
+
+
+def resolve_egl_device(cuda_idx: int | None, explicit=None) -> tuple[int, str]:
+    """렌더링에 쓸 EGL 디바이스 번호를 정합니다. (번호, 사유) 를 돌려줍니다.
+
+    우선순위: explicit(--egl-device) > EGL 열거 결과에 근거한 추정 > 0
+    """
+    if explicit is not None:
+        return int(explicit), "명시 지정(--egl-device)"
+    n = probe_egl_devices()
+    if n is None:
+        return 0, "EGL 열거 실패 → 0 으로 폴백"
+    if n <= 1:
+        return 0, f"EGL 디바이스가 {n}개뿐 → 선택 불가"
+    if cuda_idx is not None and cuda_idx < n:
+        return cuda_idx, f"EGL {n}개 중 cuda 번호와 동일하게 추정 (미검증)"
+    return 0, f"cuda:{cuda_idx} 는 EGL 범위(0~{n - 1}) 밖 → 0 으로 폴백"
+
+
 def apply_overrides(mcfg: dict, args) -> dict:
     """argparse 결과로 config 의 model 섹션을 덮어씁니다. mcfg 를 제자리 수정 후 반환.
 
@@ -207,16 +313,22 @@ def apply_overrides(mcfg: dict, args) -> dict:
         mcfg["cpu_offload"] = True
     mcfg.setdefault("cpu_offload", False)
 
-    # MuJoCo(EGL) 렌더링도 같은 GPU 로. LIBERO 환경 생성 전에만 설정되면 됩니다.
+    # --- MuJoCo(EGL) 렌더링 GPU --------------------------------------
+    # !! CUDA 번호를 그대로 쓰면 안 됩니다. EGL 은 완전히 별개의 짧은 목록입니다.
+    #    LIBERO 환경 생성 전에만 설정되면 됩니다.
     idx = device_index(mcfg["device"])
-    if idx is not None:
-        os.environ.setdefault("MUJOCO_GL", "egl")
-        os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
-        os.environ["MUJOCO_EGL_DEVICE_ID"] = str(idx)
+    os.environ.setdefault("MUJOCO_GL", "egl")
+    os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+    egl_explicit = getattr(args, "egl_device", None)
+    if egl_explicit is None:
+        egl_explicit = mcfg.get("egl_device")
+    egl_id, why = resolve_egl_device(idx, egl_explicit)
+    mcfg["egl_device"] = egl_id
+    os.environ["MUJOCO_EGL_DEVICE_ID"] = str(egl_id)
 
     shard = f"  shard={mcfg['gpus']}" if mcfg.get("gpus") else ""
     print(f"[device] model={mcfg['device']}{shard}  "
-          f"render(EGL)={os.environ.get('MUJOCO_EGL_DEVICE_ID', '-')}")
+          f"render(EGL)=egl:{egl_id}  ({why})")
     print(f"[model ] {mcfg['path']}  unnorm_key={mcfg.get('unnorm_key')}")
     return mcfg
 

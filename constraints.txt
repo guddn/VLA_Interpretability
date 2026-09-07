@@ -13,6 +13,23 @@ transformers==4.40.1
 tokenizers==0.19.1
 timm==0.9.10
 
+# robosuite 1.5.x 는 로봇/컨트롤러 구조를 크게 바꿨고 LIBERO 는 1.4.x 를 전제합니다.
+# 안 맞으면 환경 생성 중 관절 이름 조회가 실패해 **메시지 없는 AssertionError** 가 납니다:
+#     robosuite/utils/binding_utils.py  get_joint_qpos_addr
+#     assert joint_type in (mjJNT_HINGE, mjJNT_SLIDE)
+# (joint_name2id 가 -1 을 돌려줘 마지막 free joint 를 읽는 것이 원인)
+# !! 아래 핀은 "LIBERO 는 1.4 계열" 이라는 근거에 기반한 것이고, 정확한 버전은
+#    setup/08_diag_robosuite.py 가 LIBERO 저장소의 requirements 를 직접 읽어 알려줍니다.
+#    그 출력과 다르면 이 줄을 그 값으로 고치세요.
+robosuite<1.5
+
+# mujoco 3.x 는 robosuite 1.4.x 와 맞지 않습니다.
+# 관절 이름·타입이 전부 정상인데도 get_joint_qpos_addr 의 assert 가 터집니다.
+# (순수 robosuite Lift/Panda 환경에서도 재현되므로 LIBERO 와 무관합니다)
+# !! 정확한 상한은 setup/08_diag_robosuite.py 의 "robosuite 가 요구하는 mujoco"
+#    출력이 알려줍니다. 그 값과 다르면 이 줄을 그 값으로 고치세요.
+mujoco<3
+
 # requests 는 여기서 핀하지 않습니다. openvla 쪽이 2.28.1 을 물고 오는데,
 # datasets 가 >=2.32.2 를 요구해 경고가 뜹니다. datasets 는 학습용이라 저희는 안 씁니다.
 # 다만 huggingface_hub 다운로드가 실패하면 이걸 의심하세요:  pip install "requests>=2.32"
