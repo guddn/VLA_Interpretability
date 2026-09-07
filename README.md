@@ -31,7 +31,8 @@ bash setup/01_env.sh                          # conda env "vlamod" + torch + Ope
 bash setup/02_libero.sh                       # LIBERO + robosuite/MuJoCo
 conda activate vlamod
 python setup/03_download_ckpt.py --suite spatial     # ~15GB
-python setup/04_verify.py --gpu 5             # ★ 10개 항목 상태 점검
+python setup/04_verify.py --gpu 5             # ★ 11개 항목 상태 점검
+python setup/04_verify.py --gpus 0,6          #   두 장에 나눠 쓸 예정이면 합계로 판정
 
 # ── 서버 — 실행 ────────────────────────────────────────────────
 python scripts/01_smoke_forward.py --gpu 5                  # ★ 관문
@@ -190,7 +191,8 @@ setup/
   01_env.sh          conda + torch + OpenVLA
   02_libero.sh       LIBERO + 버전 충돌 되돌리기 + 검증
   03_download_ckpt.py 체크포인트 (config 의 env.hf_home 사용)
-  04_verify.py       ★ 설치 없이 상태만 10개 항목 점검 (EGL 실렌더링 포함)
+  04_verify.py       ★ 설치 없이 상태만 11개 항목 점검 (EGL 실렌더링 포함)
+                       --gpu N / --gpus 0,6 지원. EGL 렌더 GPU 도 함께 맞춥니다
 scripts/
   01_smoke_forward.py   Phase 0~1  구조 검증 7단계
   02_run_analysis.py    Phase 2~3  비율 + knockout KL 수집

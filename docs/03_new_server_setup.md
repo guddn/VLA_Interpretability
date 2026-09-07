@@ -221,10 +221,18 @@ python setup/03_download_ckpt.py --suite object       # +15GB
 
 ```bash
 python setup/04_verify.py --gpu <0단계에서 정한 번호>
+
+# 한 장에 안 들어가서 두 장에 나눠 쓸 예정이면 (합계 여유로 판정)
+python setup/04_verify.py --gpus 0,6
 ```
 
-10개 항목을 독립적으로 검사하고, 실패해도 계속 진행한 뒤 **무엇을 다시 해야 하는지**
+11개 항목을 독립적으로 검사하고, 실패해도 계속 진행한 뒤 **무엇을 다시 해야 하는지**
 알려줍니다.
+
+`--gpu` / `--gpus` 는 CUDA 검사 대상뿐 아니라 **`MUJOCO_EGL_DEVICE_ID`(렌더링 GPU)**
+도 함께 지정합니다. `--gpus` 인 경우 렌더링은 첫 번째 GPU 에 붙습니다 (EGL 은 나눌 수
+없습니다). 이 스크립트는 모델을 올리지 않으므로, **분할 로드가 실제로 되는지는
+`scripts/01_smoke_forward.py` 에서 처음 판명됩니다.**
 
 ```
   [ OK ] numpy < 2: 1.26.4

@@ -2,9 +2,19 @@
 
 **A6000 서버(Linux)에서 실행하세요.** 노트북(Windows)의 역할은 `pytest` 뿐입니다.
 
-    python setup/04_verify.py                 # 전체
+    python setup/04_verify.py                 # 전체 (GPU 0)
     python setup/04_verify.py --gpu 4         # 특정 GPU 로
+    python setup/04_verify.py --gpus 0,6      # 분할 로드용 GPU 들의 합계 여유를 검사
     python setup/04_verify.py --skip-render    # 렌더링 테스트 생략
+
+--gpus 에 대해
+--------------
+이 스크립트는 **모델을 올리지 않습니다.** 따라서 `--gpus` 는 실제 분할 로드를
+시험하지 않고, 지정한 GPU 들이 보이는지 + 합계 여유 메모리가 7B bf16 을
+감당하는지만 확인합니다. 분할 로드 자체의 성공 여부는 `scripts/01_smoke_forward.py`
+에서 처음 판명됩니다.
+
+렌더링(EGL)은 나눠 쓸 수 없으므로 **첫 번째 GPU** 에 고정됩니다.
 
 왜 이 파일이 따로 있는가
 ------------------------
@@ -40,8 +50,20 @@ def check(name: str):
                 print(f"  [ OK ] {name}: {msg or ''}")
                 return True
             except Exception as e:  # noqa: BLE001
-                RESULTS.append((name, False, f"{type(e).__name__}: {e}"))
-                print(f"  [FAIL] {name}: {type(e).__name__}: {e}")
+                # !! bare assert (메시지 없는 AssertionError) 가 라이브러리 내부에서
+                #    나면 str(e) 가 빈 문자열이라 아무 정보도 안 남습니다.
+                #    그래서 **항상** 마지막 프레임(파일:줄:함수)과 그 소스 줄을 붙입니다.
+                detail = str(e).strip()
+                where = ""
+                tb = traceback.extract_tb(e.__traceback__)
+                if tb:
+                    f = tb[-1]
+                    where = f"  ← {os.path.basename(f.filename)}:{f.lineno} in {f.name}()"
+                    if f.line:
+                        where += f"\n           {f.line.strip()}"
+                msg = f"{type(e).__name__}: {detail}" if detail else type(e).__name__
+                RESULTS.append((name, False, msg + where))
+                print(f"  [FAIL] {name}: {msg}{where}")
                 if os.environ.get("VERIFY_TRACE"):
                     traceback.print_exc()
                 return False
@@ -108,17 +130,45 @@ def c_driver():
     return f"드라이버 {drv}, torch CUDA {built} ({have})"
 
 
+WEIGHTS_GB = 15.0        # OpenVLA-7B bf16 가중치. model_loader.py 와 같은 값이어야 합니다
+
+
 @check("CUDA")
-def c_cuda(gpu: int):
+def c_cuda(gpus: list[int], headroom_gb: float = 1.5):
+    """gpus 가 1개면 단독 사용, 2개 이상이면 분할 로드를 가정하고 합계로 판정합니다."""
     import torch
     assert torch.cuda.is_available(), "CUDA 를 못 찾았습니다"
     n = torch.cuda.device_count()
-    assert gpu < n, f"GPU {gpu} 요청했으나 보이는 GPU 는 {n}개"
-    # get_device_name 은 CUDA 를 실제로 초기화합니다 — 드라이버가 낮으면 여기서 죽습니다
-    name = torch.cuda.get_device_name(gpu)
-    free, total = torch.cuda.mem_get_info(gpu)
-    note = "" if free > 18e9 else "  ← 여유 부족 경고 (7B bf16 은 18~20GB 필요)"
-    return f"{n}장, cuda:{gpu} {name} 여유 {free/1e9:.1f}/{total/1e9:.1f}GB{note}"
+    for g in gpus:
+        assert g < n, f"GPU {g} 요청했으나 보이는 GPU 는 {n}개 (0~{n - 1})"
+
+    lines, total_usable = [], 0.0
+    for g in gpus:
+        # get_device_name 은 CUDA 를 실제로 초기화합니다 — 드라이버가 낮으면 여기서 죽습니다
+        name = torch.cuda.get_device_name(g)
+        free, total = torch.cuda.mem_get_info(g)
+        total_usable += max(free / 1e9 - headroom_gb, 0.0)
+        lines.append(f"cuda:{g} {name} 여유 {free/1e9:.1f}/{total/1e9:.1f}GB")
+
+    if len(gpus) == 1:
+        free = torch.cuda.mem_get_info(gpus[0])[0] / 1e9
+        # model_loader.load_openvla 의 단일 GPU 가드와 같은 기준
+        assert free >= WEIGHTS_GB + 1.0, (
+            f"cuda:{gpus[0]} 여유 {free:.1f}GB — 가중치 {WEIGHTS_GB:.0f}GB 를 못 올립니다.\n"
+            f"    조치: 다른 GPU 를 쓰거나, --gpus 로 두 장에 나누세요"
+        )
+        note = "" if free >= WEIGHTS_GB + 3.0 else (
+            "  ← 빠듯합니다 (attention 버퍼가 더 필요). 긴 롤아웃에서 OOM 가능"
+        )
+        return f"{n}장 보임 | " + lines[0] + note
+
+    assert total_usable >= WEIGHTS_GB, (
+        f"분할 사용가능 합계 {total_usable:.1f}GB — 가중치 {WEIGHTS_GB:.0f}GB 에 모자랍니다 "
+        f"(headroom {headroom_gb}GB/장 차감 후).\n"
+        f"    조치: --headroom-gb 0.8 로 낮추거나, 더 빈 GPU 를 쓰세요"
+    )
+    return (f"{n}장 보임 | " + " | ".join(lines)
+            + f" | 분할 시 사용가능 합계 {total_usable:.1f}GB (가중치 {WEIGHTS_GB:.0f}GB)")
 
 
 @check("opencv < 5")
@@ -212,7 +262,15 @@ def c_hf(cfg: dict):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/default.yaml")
-    ap.add_argument("--gpu", type=int, default=0)
+    ap.add_argument("--gpu", type=int, default=None, metavar="N",
+                    help="검사할 GPU 번호 (기본 0)")
+    ap.add_argument("--gpus", default=None, metavar="0,6",
+                    help="분할 로드에 쓸 GPU 목록. 합계 여유 메모리로 판정합니다. "
+                         "EGL 렌더링은 첫 번째 GPU 에 붙습니다")
+    ap.add_argument("--headroom-gb", type=float, default=1.5, metavar="G",
+                    help="--gpus 판정 시 GPU 당 안전 마진(GB). 기본 1.5")
+    ap.add_argument("--hf-home", default=None,
+                    help="HuggingFace 캐시 루트. config 의 env.hf_home 을 덮어씀")
     ap.add_argument("--skip-render", action="store_true")
     ap.add_argument("--out", default="outputs/verify_render.png")
     ap.add_argument("--force", action="store_true",
@@ -252,8 +310,26 @@ def main() -> int:
         return 1
 
     # HF_HOME / MUJOCO_GL 을 config 에서 설정 (libero import 전에)
-    from vlamod.device import apply_env
+    from vlamod.device import apply_env, parse_gpus
     apply_env(cfg, args)
+
+    # --- GPU 선택 ------------------------------------------------------
+    gpu_list = parse_gpus(args.gpus)
+    if gpu_list and args.gpu is not None:
+        print("!! --gpu 와 --gpus 는 함께 쓸 수 없습니다.")
+        return 1
+    if not gpu_list:
+        gpu_list = [0 if args.gpu is None else args.gpu]
+
+    # !! MuJoCo(EGL) 는 PyTorch 와 **독립적으로** GPU 를 고릅니다.
+    #    이걸 안 맞추면 --gpu 4 를 줘도 렌더링은 0번에서 일어납니다.
+    #    OffScreenRenderEnv 생성 전에만 설정되면 되므로 여기가 맞는 위치입니다.
+    os.environ.setdefault("MUJOCO_GL", "egl")
+    os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+    os.environ["MUJOCO_EGL_DEVICE_ID"] = str(gpu_list[0])
+    shard = f"  (분할 {gpu_list})" if len(gpu_list) > 1 else ""
+    print(f"[device] 검사 대상 cuda:{gpu_list[0]}{shard}  "
+          f"render(EGL)=cuda:{gpu_list[0]}")
 
     os.makedirs("outputs", exist_ok=True)
 
@@ -262,7 +338,7 @@ def main() -> int:
     c_numpy()
     c_torch_numpy()
     c_driver()
-    c_cuda(args.gpu)
+    c_cuda(gpu_list, args.headroom_gb)
     c_cv2()
     c_transformers()
     c_misc()
@@ -298,8 +374,12 @@ def main() -> int:
         print("\n자세한 스택은 VERIFY_TRACE=1 을 붙여 다시 돌리세요.")
         return 1
 
+    flag = (f"--gpus {','.join(map(str, gpu_list))}" if len(gpu_list) > 1
+            else f"--gpu {gpu_list[0]}")
     print("\n전부 통과했습니다. Stage 2 로 가세요:")
-    print(f"  python scripts/01_smoke_forward.py --gpu {args.gpu}")
+    print(f"  python scripts/01_smoke_forward.py {flag}")
+    if len(gpu_list) > 1:
+        print("  (분할 로드가 실제로 되는지는 여기서 처음 판명됩니다 — 미검증 경로입니다)")
     print(f"\n!! {args.out} 을 열어 로봇 팔이 똑바로 서 있는지 눈으로 확인하세요.")
     print("   뒤집혀 있으면 vlamod/env_libero.py 의 obs_to_image(flip=...) 를 바꿔야 합니다.")
     return 0

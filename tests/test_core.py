@@ -313,9 +313,30 @@ def test_apply_env_expands_tilde(tmp_path, monkeypatch):
 
 
 def test_apply_env_noop_without_section(monkeypatch):
+    """env 섹션이 없으면 HF_HOME / MUJOCO_GL 은 건드리지 않습니다.
+
+    단 CUDA_DEVICE_ORDER 는 **설정이 없어도 PCI_BUS_ID 를 강제**합니다.
+    CUDA 기본값(FASTEST_FIRST)은 카드가 섞인 서버에서 torch 번호와
+    nvidia-smi 번호를 어긋나게 만들기 때문입니다.
+    """
     monkeypatch.delenv("HF_HOME", raising=False)
-    assert apply_env({}, SimpleNamespace()) == {}
+    applied = apply_env({}, SimpleNamespace())
+    assert applied == {"CUDA_DEVICE_ORDER": "PCI_BUS_ID"}
     assert "HF_HOME" not in os.environ
+
+
+def test_apply_env_cuda_order_can_be_disabled(monkeypatch):
+    monkeypatch.delenv("CUDA_DEVICE_ORDER", raising=False)
+    applied = apply_env({"env": {"cuda_device_order": None}}, SimpleNamespace())
+    assert "CUDA_DEVICE_ORDER" not in applied
+    assert "CUDA_DEVICE_ORDER" not in os.environ
+
+
+def test_apply_env_cuda_order_explicit(monkeypatch):
+    monkeypatch.delenv("CUDA_DEVICE_ORDER", raising=False)
+    applied = apply_env({"env": {"cuda_device_order": "FASTEST_FIRST"}}, SimpleNamespace())
+    assert applied["CUDA_DEVICE_ORDER"] == "FASTEST_FIRST"
+    assert os.environ["CUDA_DEVICE_ORDER"] == "FASTEST_FIRST"
 
 
 def test_apply_env_warns_if_hf_already_imported(tmp_path, monkeypatch):

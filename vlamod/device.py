@@ -69,6 +69,35 @@ def apply_env(cfg: dict, args=None) -> dict:
             os.environ[envname] = str(val)
             applied[envname] = str(val)
 
+    # --- GPU 번호 체계 ------------------------------------------------
+    # !! CUDA 의 기본 정렬은 CUDA_DEVICE_ORDER=FASTEST_FIRST 입니다.
+    #    카드 모델이 섞인 서버에서는 torch 의 cuda:N 이 nvidia-smi / nvtop 의
+    #    GPU N 과 **다른 물리 카드**를 가리킵니다.
+    #    PCI_BUS_ID 로 두면 nvidia-smi 와 번호가 일치합니다.
+    #    CUDA 런타임 초기화(첫 CUDA 호출) 전에만 설정되면 되므로,
+    #    import torch 뒤라도 CUDA 를 아직 안 건드렸으면 유효합니다.
+    order = ecfg.get("cuda_device_order", "PCI_BUS_ID")
+    if order:
+        try:
+            import torch  # noqa: PLC0415
+            if torch.cuda.is_initialized():
+                warnings.warn(
+                    "CUDA 가 이미 초기화되어 CUDA_DEVICE_ORDER 변경이 반영되지 않습니다. "
+                    "apply_env() 를 CUDA 호출 전에 부르세요.",
+                    stacklevel=2,
+                )
+        except ImportError:
+            pass
+        os.environ["CUDA_DEVICE_ORDER"] = str(order)
+        applied["CUDA_DEVICE_ORDER"] = str(order)
+
+    cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if cvd:
+        # 스케줄러나 .bashrc 가 걸어둔 경우가 많습니다. 이게 있으면 번호가
+        # **그 목록 안에서 0부터** 다시 매겨지므로 nvtop 번호와 어긋납니다.
+        print(f"[env   ] !! CUDA_VISIBLE_DEVICES={cvd} 가 설정되어 있습니다. "
+              f"GPU 번호는 이 목록 안의 상대 번호입니다 (cuda:0 = 실제 {cvd.split(',')[0]}번).")
+
     if applied:
         print("[env   ] " + "  ".join(f"{k}={v}" for k, v in applied.items()))
     return applied
