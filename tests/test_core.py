@@ -439,3 +439,53 @@ def test_apply_overrides_headroom_override(monkeypatch):
     assert c["headroom_gb"] == 0.8
     assert c["cpu_offload"] is True
     assert c["gpus"] == [0, 6]
+
+
+# ---------------------------------------------------- L 태그 경계 (실전 버그)
+def test_language_span_includes_leading_space_token():
+    """Llama fast tokenizer 는 offset 에 앞 공백을 포함합니다.
+
+    실제로 이것 때문에 지시문의 첫 단어('pick')가 T 로 새어나갔습니다.
+    build_spans 내부의 판정 로직만 떼어 재현합니다.
+    """
+    prompt = "In: What action should the robot take to pick up the plate?\nOut:"
+    i_start = prompt.index("pick")
+    i_end = i_start + len("pick up the plate")
+
+    # ' pick' — 앞 공백 포함 offset
+    cs, ce = i_start - 1, i_start + 4
+
+    # 예전(잘못된) 판정
+    assert not (cs >= i_start and ce <= i_end)
+
+    # 지금(고친) 판정: 공백을 벗겨내고 겹침으로 본다
+    s, e = cs, ce
+    while s < e and prompt[s].isspace():
+        s += 1
+    while e > s and prompt[e - 1].isspace():
+        e -= 1
+    assert s < i_end and e > i_start          # → L 로 분류됨
+    assert prompt[s:e] == "pick"
+
+
+def test_language_span_excludes_token_before_instruction():
+    """경계 바로 앞 토큰('to')은 여전히 L 이 아니어야 합니다."""
+    prompt = "In: What action should the robot take to pick up the plate?\nOut:"
+    i_start = prompt.index("pick")
+    i_end = i_start + len("pick up the plate")
+    cs, ce = i_start - 3, i_start - 1        # ' to'
+    s, e = cs, ce
+    while s < e and prompt[s].isspace():
+        s += 1
+    while e > s and prompt[e - 1].isspace():
+        e -= 1
+    assert not (s < i_end and e > i_start)
+
+
+def test_language_span_excludes_trailing_question_mark():
+    prompt = "In: What action should the robot take to pick up the plate?\nOut:"
+    i_start = prompt.index("pick")
+    i_end = i_start + len("pick up the plate")
+    cs, ce = i_end, i_end + 1                # '?'
+    s, e = cs, ce
+    assert not (s < i_end and e > i_start)

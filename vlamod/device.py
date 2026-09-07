@@ -358,13 +358,19 @@ def report_gpu(device: str, gpus: list[int] | None = None) -> None:
     if idx >= n:
         raise RuntimeError(f"GPU {idx} 를 요청했지만 보이는 GPU 는 {n}개 (0~{n - 1}) 입니다.")
     free, total = torch.cuda.mem_get_info(idx)
+    mine = torch.cuda.memory_allocated(idx)
+    # !! 이 함수는 **모델 로드 직후**에 불립니다. 따라서 free 는 이미 가중치를
+    #    뺀 값입니다. 예전에는 free < 18GB 면 경고했는데, 그러면 정상 로드 후에도
+    #    "메모리가 부족합니다" 가 뜨는 오해를 낳습니다 (로드는 이미 끝났는데).
+    #    여기서는 **앞으로 쓸 활성값/attention 버퍼**가 들어갈 자리만 봅니다.
     print(
         f"[gpu   ] cuda:{idx} {torch.cuda.get_device_name(idx)}  "
-        f"사용가능 {free / 1e9:.1f}GB / 전체 {total / 1e9:.1f}GB"
+        f"이 프로세스 {mine / 1e9:.1f}GB  |  남은 여유 {free / 1e9:.1f}GB / "
+        f"전체 {total / 1e9:.1f}GB"
     )
-    if free < 18e9:
+    if free < 3e9:
         warnings.warn(
-            f"cuda:{idx} 의 여유 메모리가 {free / 1e9:.1f}GB 입니다. "
-            "OpenVLA-7B(bf16) 는 약 16GB + attention 버퍼가 필요합니다.",
+            f"cuda:{idx} 의 남은 여유가 {free / 1e9:.1f}GB 뿐입니다. "
+            "긴 롤아웃에서 attention 버퍼 때문에 OOM 이 날 수 있습니다.",
             stacklevel=2,
         )

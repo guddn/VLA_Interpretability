@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import dataclasses
+import warnings
 from typing import Sequence
 
 import torch
@@ -166,9 +167,24 @@ def build_spans(
         if cs == ce:  # 특수 토큰 등
             template.append(p)
             continue
-        # instruction 문자 구간과 겹치면 L
+
+        # !! Llama/SentencePiece 계열 fast tokenizer 는 offset 에 **앞 공백을 포함**합니다.
+        #    프롬프트가 "... to pick up ..." 이고 instruction 이 41번 문자부터라면
+        #    ' pick' 의 offset 은 (40, 45) 로 잡힙니다. 여기서 `cs >= i_start` 로
+        #    검사하면 **지시문의 주동사 'pick' 이 통째로 T 로 빠집니다.**
+        #    (실제로 그렇게 나왔습니다: |L|=11, 'pick' 누락)
+        #    → 공백을 벗겨낸 실질 문자 구간으로 판정하고, 겹치면 L 로 봅니다.
+        s, e = cs, ce
+        while s < e and prompt[s].isspace():
+            s += 1
+        while e > s and prompt[e - 1].isspace():
+            e -= 1
+        if s >= e:                      # 공백만으로 이루어진 토큰
+            template.append(p)
+            continue
+
         if instruction_only:
-            in_instr = (cs >= i_start) and (ce <= i_end)
+            in_instr = (s < i_end) and (e > i_start)
         else:
             in_instr = True
         (language if in_instr else template).append(p)
@@ -182,6 +198,26 @@ def build_spans(
             "언어 구간 L 이 비었습니다. instruction 문자 오프셋 매핑이 실패했습니다. "
             "PROMPT_TEMPLATE 이 실제 체크포인트의 템플릿과 같은지 확인하세요."
         )
+
+    # --- 자기검증: L 이 지시문을 **빠짐없이** 덮는가 -------------------
+    # 오프셋 경계 문제로 단어 한두 개가 조용히 T 로 새는 사고가 실제로 있었습니다.
+    # 지시문만 따로 토큰화한 개수와 비교해, 어긋나면 경고합니다.
+    # (완전 일치를 강제하진 않습니다 — 앞 공백 때문에 ±1 은 정상입니다)
+    if instruction_only:
+        try:
+            instr_text = prompt[i_start:i_end]
+            n_expect = len(tokenizer(instr_text, add_special_tokens=False)["input_ids"])
+            if abs(len(language) - n_expect) > 1:
+                warnings.warn(
+                    f"L 토큰 수({len(language)})가 지시문 단독 토큰화({n_expect})와 "
+                    f"{abs(len(language) - n_expect)}개 차이납니다. "
+                    f"instruction={instr_text!r}\n"
+                    "  pretty_print_spans() 출력을 눈으로 확인하세요. "
+                    "L 태그가 밀려 있으면 R 지표 전체가 왜곡됩니다.",
+                    stacklevel=2,
+                )
+        except Exception:  # noqa: BLE001
+            pass
 
     return TokenSpans(
         n_total_prompt=n_total_prompt,
