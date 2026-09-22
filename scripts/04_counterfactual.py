@@ -66,7 +66,24 @@ def paraphrase(instr: str) -> str:
 
 
 @torch.no_grad()
-def one_condition(vla, image, instruction, vspan, cfg):
+def one_condition(vla, image, instruction, vspan, cfg, force_ids=None):
+    """한 조건을 돌려 (capture, ratios, spans, action_ids) 반환.
+
+    force_ids
+    ---------
+    teacher-forcing 에 쓸 action token 을 **강제로 지정**합니다.
+
+    왜 필요한가 (docs/05_interventions.md [L1]/[L3] 규약 참고):
+      - 조건마다 자기 action token 을 새로 생성하면, KL 이 "조건부 분포가 바뀐 것"과
+        "앞 토큰이 달라져 흘러간 것(autoregressive drift)" 을 섞어서 잽니다.
+      - 반면 02_run_analysis.py 의 knockout 은 **모든 조건이 같은 base 토큰**으로
+        teacher-forcing 합니다.
+      - 두 스크립트의 KL 을 같은 표에 놓으려면 규약이 같아야 합니다.
+        그래서 기본값을 'shared'(valid 의 토큰을 전 조건에 공유)로 둡니다.
+
+    !! 조건마다 |L| 이 달라 **토큰 위치(spans.action)는 조건별로 다시 계산**됩니다.
+       공유하는 건 위치가 아니라 action token **id 7개** 입니다.
+    """
     prompt, span = TI.build_prompt(instruction) if instruction.strip() else TI.build_prompt(" ")
     inputs = vla.processor(prompt, image).to(vla.device, dtype=vla.dtype)
     spans = TI.build_spans(
@@ -75,10 +92,10 @@ def one_condition(vla, image, instruction, vspan, cfg):
         sink_positions=cfg["tokens"]["sink_positions"],
         instruction_only=cfg["tokens"]["instruction_only"],
     )
-    ids = cap.generate_action_tokens(vla, inputs, n_action=7)
+    ids = force_ids if force_ids is not None else cap.generate_action_tokens(vla, inputs, n_action=7)
     c = cap.teacher_forced_capture(vla, inputs, ids, spans.action)
     r = M.compute_ratios(c.attn, c.vnorm, spans.visual, spans.language, spans.sink)
-    return c, r, spans
+    return c, r, spans, ids
 
 
 def main() -> int:
@@ -109,6 +126,10 @@ def main() -> int:
                     help='--gpu 대신 문자열로 지정. "cuda:3" / "3" / "cpu"')
     ap.add_argument("--model", default=None, help="체크포인트 경로/HF repo. config 값을 덮어씀")
     ap.add_argument("--unnorm-key", default=None, help="action un-normalization key. config 값을 덮어씀")
+    ap.add_argument("--prefix-mode", choices=["shared", "own"], default="shared",
+                    help="teacher-forcing 에 쓸 action token. "
+                         "shared(기본)=valid 의 토큰을 전 조건 공유 → 02 의 knockout 과 같은 규약. "
+                         "own=조건마다 새로 생성 (autoregressive drift 포함)")
     ap.add_argument("--tag", default=None, help="출력 파일명 접미사")
     args = ap.parse_args()
 
@@ -159,11 +180,15 @@ def main() -> int:
                         "empty": " ",
                     }
                     step_ptr += 1
-                    base = None
+                    base, base_ids = None, None
+                    # conds 는 삽입 순서를 지키므로 'valid' 가 먼저 돕니다 (py3.7+)
                     for name, instr in conds.items():
-                        c, r, _ = one_condition(vla, img, instr, vspan, cfg)
+                        force = (base_ids if (args.prefix_mode == "shared"
+                                              and name != "valid") else None)
+                        c, r, _, ids = one_condition(vla, img, instr, vspan, cfg,
+                                                     force_ids=force)
                         if name == "valid":
-                            base = c
+                            base, base_ids = c, ids
                         kl = float(M.action_kl(base.action_logits, c.action_logits))
                         same = int(
                             (M.decode_actions(base.action_logits)
@@ -179,6 +204,7 @@ def main() -> int:
                             "uniform_baseline": r.uniform_baseline,
                             "KL_vs_valid": kl,
                             "n_identical_dof": same,
+                            "prefix_mode": args.prefix_mode,
                         })
                 action = vla.model.predict_action(
                     **vla.processor(TI.build_prompt(instrs[tid])[0], EL.obs_to_image(obs))
@@ -195,6 +221,9 @@ def main() -> int:
     out = f"outputs/counterfactual_{stem}.csv"
     df.to_csv(out, index=False)
     print(f"\n저장: {out}  ({len(df)} rows)")
+    print(f"teacher-forcing prefix 규약: {args.prefix_mode}"
+          + ("  (02 의 knockout 과 동일 — KL 비교 가능)" if args.prefix_mode == "shared"
+             else "  !! 02 와 규약이 달라 KL 을 나란히 비교하면 안 됩니다"))
 
     print("\n--- 조건별 요약 ---")
     print(df.groupby("condition")[["R_raw", "R_norm", "R_vnorm", "KL_vs_valid",

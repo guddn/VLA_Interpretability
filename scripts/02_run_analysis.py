@@ -93,6 +93,14 @@ def main() -> int:
         for ep in range(args.episodes):
             EL.reset_to(task, ep)
             obs = EL.step_noop(task, 10)
+            # !! 이 에피소드가 만든 행들의 위치를 기억해 두었다가, 끝난 뒤 성공 여부를
+            #    소급해서 채웁니다. 성공률이 필요한 이유 두 가지:
+            #      1) 이미지 전처리(상하/좌우 반전)가 학습과 어긋나면 성공률이 무너집니다.
+            #         육안으로는 못 잡는 오류를 잡는 **유일한 경험적 검증**입니다.
+            #      2) 나중에 "언어 의존 그룹 vs 비전 의존 그룹" 을 나눌 때
+            #         성공/실패 라벨이 있어야 그룹 특성을 말할 수 있습니다.
+            ep_row_start = len(rows)
+            ep_done = False
             for t in range(args.max_steps):
                 if t % args.stride == 0:
                     img = EL.obs_to_image(obs)
@@ -126,7 +134,29 @@ def main() -> int:
                 )
                 obs, _, done, _ = task.env.step(action.tolist())
                 if done:
+                    ep_done = True
                     break
+
+            # --- 에피소드 종료: 성공 여부 판정 -------------------------
+            # !! done=True 는 "성공" 과 같지 않습니다. horizon 도달로도 True 가 됩니다.
+            #    LIBERO/robosuite 는 목표 술어를 직접 검사하는 check_success() 를 줍니다.
+            #    그게 없으면 done 으로 폴백하되, 그 사실을 컬럼에 남깁니다.
+            success, how = None, "unknown"
+            for obj in (task.env, getattr(task.env, "env", None)):
+                fn = getattr(obj, "check_success", None) or getattr(obj, "_check_success", None)
+                if callable(fn):
+                    try:
+                        success, how = bool(fn()), "check_success"
+                        break
+                    except Exception:  # noqa: BLE001
+                        pass
+            if success is None:
+                success, how = bool(ep_done), "done_flag(부정확)"
+            for r in rows[ep_row_start:]:
+                r["ep_success"] = success
+                r["success_source"] = how
+                r["ep_len"] = t + 1
+            print(f"    └ ep {ep}: success={success} ({how}), {t + 1} steps")
         task.env.close()
 
     df = pd.DataFrame(rows)
@@ -150,6 +180,20 @@ def main() -> int:
         m = df["lang_vs_control"].mean()
         print(f"\n언어 knockout / 랜덤 대조군 knockout 비율 평균 = {m:.3f}")
         print("  1에 가까우면: 언어 토큰이 '아무 토큰이나 몇 개 지운 것'과 구별되지 않음")
+
+    # ---- 성공률 — 전처리 정합성의 **유일한 경험적 검증** ----------------
+    if "ep_success" in df.columns:
+        per_ep = df.groupby(["task_id", "episode"])["ep_success"].first()
+        sr = float(per_ep.mean())
+        src = df["success_source"].iloc[0] if "success_source" in df.columns else "?"
+        print(f"\n--- 태스크 성공률 ---")
+        print(f"  {per_ep.sum():.0f} / {len(per_ep)} = {sr:.1%}   (판정: {src})")
+        print("  ★ 이 값을 OpenVLA 논문의 LIBERO 수치와 대조하세요.")
+        print("    크게 낮으면 이미지 전처리(상하/좌우 반전)가 학습과 어긋났을 수 있습니다.")
+        print("    육안 확인으로는 좌우 반전을 잡을 수 없습니다 — 성공률이 유일한 단서입니다.")
+        if sr == 0.0:
+            print("  !! 성공률 0% 입니다. max_steps 가 너무 짧거나(기본 40),")
+            print("     전처리가 어긋났거나, unnorm_key 가 체크포인트와 안 맞습니다.")
     return 0
 
 

@@ -9,6 +9,8 @@ VLA(OpenVLA)에서 **action token 이 image token 과 language token 을 어떤 
 | [`docs/01_module_reference.md`](docs/01_module_reference.md) | 각 파일의 목적과 설계 근거 |
 | [`docs/02_runbook.md`](docs/02_runbook.md) | 단계별 실행 순서와 통과 기준(Gate) |
 | [`docs/03_new_server_setup.md`](docs/03_new_server_setup.md) | **새 서버에 처음부터 세팅** (conda 부터) |
+| [`docs/04_rendering_pipeline.md`](docs/04_rendering_pipeline.md) | 픽셀이 만들어져 visual token 이 되기까지 (패키지별 역할) |
+| [`docs/05_interventions.md`](docs/05_interventions.md) | 인과 개입 설계 — **어디에 개입하는가**로 분류 |
 
 ## 검증하는 가설
 
@@ -282,82 +284,6 @@ action query s, layer l, head h 에 대해:
 
 `|V|` ≈ 256, `|L|` ≈ 5~15 이므로 균등 분포만 가정해도 `R_raw ≈ 0.05` 가 나옵니다.
 **`uniform_baseline` 보다 낮아야** "언어를 덜 본다"고 말할 수 있습니다.
-
----
-
-## 함정 목록 (전부 실제로 겪었습니다)
-
-1. **`attn_implementation="eager"` 필수.** flash_attention_2 / sdpa 는 `output_attentions=True` 를
-   조용히 무시합니다. 에러 없이 `attentions=None` 이 나옵니다. `model_loader.py` 가 막아 둡니다.
-
-2. **`PIP_CONSTRAINT` 를 걸어 두세요.** LIBERO 의 requirements 가 `numpy>=2` / `opencv 5.x` 를
-   요구해서, pip 을 쓸 때마다 numpy 가 2.x 로 올라갑니다. torch 2.2.0 은 numpy 1.x 로
-   컴파일돼 있어 그러면 `RuntimeError: Numpy is not available` 로 죽습니다.
-   설치할 때마다 되돌리지 말고 원천 차단하세요:
-   ```bash
-   export PIP_CONSTRAINT=$(pwd)/constraints.txt
-   ```
-   **매번 치기 싫으면** `setup/01_env.sh` 를 한 번 더 돌리세요. conda 환경의
-   `activate.d` 에 등록해서 `conda activate vlamod` 할 때 자동으로 걸립니다.
-   (`configs/*.yaml` 에 넣는 건 **효과가 없습니다.** 그건 파이썬 프로세스 안의
-   설정이고 pip 은 셸에서 따로 돕니다.) `04_verify.py` 가 이 항목을 점검합니다.
-
-3. **NGC pip 미러.** `/etc/pip.conf` 에 `pypi.ngc.nvidia.com` 이 박혀 있으면 패키지마다
-   DNS 5회 재시도가 걸려 설치가 **멈춘 것처럼** 보입니다. `export PIP_EXTRA_INDEX_URL="https://pypi.org/simple"`.
-
-4. **transformers 4.40.x 고정.** 상위 버전은 attention mask 전달 규약이 바뀌어
-   `intervene.py` 의 knockout 훅이 깨집니다.
-
-5. **visual token 개수를 문서에서 베끼지 말 것.** `probe_visual_span()` 이 이미지를 바꿔가며
-   embedding 차이로 **실측**합니다. 256이 아니면 경고가 뜹니다.
-
-6. **템플릿 문구를 L 에서 제외할 것.** "In: What action should the robot take to" 는
-   모든 샘플에 동일하므로 여기 걸린 attention 은 지시 내용과 무관합니다.
-
-7. **BOS/attention sink 를 V 에 넣지 말 것.** 비전 비중이 인위적으로 부풀려집니다.
-
-8. **knockout 은 pre-softmax 로.** softmax 뒤에 0으로 만들고 재정규화하는 것과 결과가 다릅니다.
-
-9. **치환 baseline 은 빈 문자열이 아니라 다른 지시문으로.** 빈 입력은 OOD 라서
-   "언어를 안 쓴다"가 아니라 "이상한 입력이라 망가졌다"가 됩니다.
-
-10. **랜덤 대조군 없이 결론 내지 말 것.** 언어 토큰과 같은 개수의 visual 토큰을 무작위로
-    차단한 것과 비교해야 "언어가 특별하다/아니다"를 말할 수 있습니다.
-
-11. **`get_benchmark_dict()` 통과 ≠ 렌더링 OK.** 그건 파이썬 dict 를 읽을 뿐 EGL 을
-    건드리지 않습니다. `setup/04_verify.py` 가 실제로 프레임을 뽑아 확인합니다.
-
-12. **LIBERO 이미지 상하 반전.** `outputs/verify_render.png` 를 열어 **눈으로** 확인하세요.
-    방향이 틀리면 vision attention 분석 전체가 무의미해집니다.
-
-13. **LIBERO 는 원래 언어가 거의 필요 없는 벤치마크입니다.**
-    `04_counterfactual.py --ambiguous-tasks` 로 후보 물체가 둘 이상인 task 를 지정하지 않으면
-    "그건 벤치마크 탓"이라는 반박을 막을 수 없습니다.
-
----
-
-## 문제가 생기면
-
-```bash
-python setup/04_verify.py --gpu <번호>     # 실패 항목과 조치를 알려줍니다
-VERIFY_TRACE=1 python setup/04_verify.py   # 스택 트레이스까지
-```
-
-| 증상 | 원인 / 조치 |
-|---|---|
-| `RuntimeError: Numpy is not available` | numpy 2.x. `PIP_CONSTRAINT` 걸고 `pip install 'numpy<2' --force-reinstall` |
-| `The NVIDIA driver ... is too old (11080)` | 드라이버가 CUDA 11.8 까지. torch 를 **cu118 빌드**로 재설치 (`--index-url .../whl/cu118`) |
-| LIBERO 폴더 밖에서만 `No module named 'libero'` | namespace package editable 문제. `pip install -e . --config-settings editable_mode=compat` |
-| `attentions 가 None` | eager 아님. `configs/*.yaml` 의 `attn_implementation` 확인 |
-| `4D attention mask 를 기대했는데 ND` | transformers 버전. 4.40.x 로 |
-| `ModuleNotFoundError: vlamod.device` | 서버 전송 누락. PyCharm Deployment 는 수동 업로드 필요 |
-| `No module named 'libero'` | `cd ~/third_party/LIBERO && pip install -e .` (EGL 문제 아님) |
-| `libero 는 되는데 benchmark import 실패` | **이때가 EGL 문제.** `ldconfig -p \| grep libEGL` |
-| 설치가 멈춘 것처럼 보임 | NGC DNS 재시도. 함정 3 |
-| `언어 구간 L 이 비었습니다` | `token_index.PROMPT_TEMPLATE` 이 체크포인트와 불일치 |
-| `범위 검증: 실패` | `action_bin_token_ids` 의 오프셋 ±1 조정 |
-| CUDA OOM | 24GB 이상 빈 GPU 로 바꾸거나 `--gpus a,b` |
-| 모델은 뜨는데 렌더링만 실패 | `render(EGL)` 번호가 `model` 과 다른지 확인 |
 
 ---
 
