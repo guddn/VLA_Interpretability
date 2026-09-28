@@ -44,6 +44,7 @@ from vlamod.device import apply_env, apply_overrides, report_gpu  # noqa: E402
 from vlamod import capture as cap  # noqa: E402
 from vlamod import env_libero as EL  # noqa: E402
 from vlamod import metrics as M  # noqa: E402
+from vlamod import pipeline as P  # noqa: E402
 from vlamod import token_index as TI  # noqa: E402
 from vlamod.model_loader import load_openvla  # noqa: E402
 
@@ -206,10 +207,8 @@ def main() -> int:
                             "n_identical_dof": same,
                             "prefix_mode": args.prefix_mode,
                         })
-                action = vla.model.predict_action(
-                    **vla.processor(TI.build_prompt(instrs[tid])[0], EL.obs_to_image(obs))
-                    .to(vla.device, dtype=vla.dtype),
-                    unnorm_key=mcfg["unnorm_key"], do_sample=False,
+                action = P.policy_action(
+                    vla, EL.obs_to_image(obs), instrs[tid], mcfg["unnorm_key"]
                 )
                 obs, _, done, _ = task.env.step(action.tolist())
                 if done:

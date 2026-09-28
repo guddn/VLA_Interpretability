@@ -17,6 +17,32 @@ from . import token_index as TI
 
 
 @torch.no_grad()
+def policy_action(vla, image, instruction: str, unnorm_key: str):
+    """정책이 내는 **연속 action 7차원**. 환경을 한 스텝 진행시킬 때 씁니다.
+
+    !! OpenVLA 의 `predict_action` 은 내부에서 input_ids 끝에 토큰 하나(id 29871,
+       Llama 의 빈 토큰)를 덧붙입니다:
+
+           input_ids = torch.cat((input_ids, torch.Tensor([29871]).long()...), dim=1)
+
+       그런데 processor 가 준 `attention_mask` 는 **덧붙이기 전 길이**입니다.
+       그대로 넘기면 멀티모달 마스크(256 + 34 = 290)와 실제 임베딩(256 + 35 = 291)이
+       1 어긋나서 이렇게 죽습니다:
+
+           RuntimeError: The size of tensor a (291) must match
+                         the size of tensor b (290) at non-singleton dimension 3
+
+       `attention_mask` 를 빼고 넘기면 generate 가 올바른 길이로 새로 만듭니다.
+       (우리 `generate_action_tokens` 는 토큰을 안 붙이므로 이 문제가 없었고,
+        그래서 Stage 2 에서는 드러나지 않았습니다.)
+    """
+    prompt, _ = TI.build_prompt(instruction)
+    inputs = vla.processor(prompt, image).to(vla.device, dtype=vla.dtype)
+    inputs = {k: v for k, v in inputs.items() if k != "attention_mask"}
+    return vla.model.predict_action(**inputs, unnorm_key=unnorm_key, do_sample=False)
+
+
+@torch.no_grad()
 def analyze_step(
     vla,
     image,

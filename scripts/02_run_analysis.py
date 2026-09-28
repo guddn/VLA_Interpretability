@@ -126,11 +126,8 @@ def main() -> int:
                         )
                     )
                 # 정책이 낸 행동으로 환경을 진행 (분석 대상 궤적을 실제 정책이 만들도록)
-                action = vla.model.predict_action(
-                    **vla.processor(TI.build_prompt(task.instruction)[0], EL.obs_to_image(obs))
-                    .to(vla.device, dtype=vla.dtype),
-                    unnorm_key=mcfg["unnorm_key"],
-                    do_sample=False,
+                action = P.policy_action(
+                    vla, EL.obs_to_image(obs), task.instruction, mcfg["unnorm_key"]
                 )
                 obs, _, done, _ = task.env.step(action.tolist())
                 if done:
