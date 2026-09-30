@@ -55,9 +55,10 @@ python setup/04_verify.py --gpus 0,6          #   두 장에 나눠 쓸 예정�
 python scripts/01_smoke_forward.py --gpu 5                  # ★ 관문
 python scripts/01_smoke_forward.py --gpu 5 --libero --suite spatial --task-id 0
 
+python scripts/08_policy_sanity.py --gpu 5 --tasks 0 --gripper-fix both   # ★ 성공 1회 먼저 확인
 python scripts/02_run_analysis.py  --gpu 5 --suite spatial --tasks 0 1 2 --episodes 3
 python scripts/03_correlation.py   --csv outputs/analysis_spatial.csv    # GPU 불필요
-python scripts/04_counterfactual.py --gpu 5 --suite object --tasks 0 1 2 3
+python scripts/04_counterfactual.py --gpu 5 --suite spatial --tasks 0 1 2 3   # 05_plots 와 suite 맞추기
 python scripts/05_plots.py         --suite spatial                      # GPU 불필요
 ```
 
@@ -254,6 +255,8 @@ scripts/
   03_correlation.py     H2         상관 + 대조군 t-검정
   04_counterfactual.py  H1         지시 조건 4종 비교
   05_plots.py                      그림 4장
+  07_dump_model_input.py           모델이 실제로 받은 이미지(pixel_values) PNG 로 복원
+  08_policy_sanity.py   ★ 선행    정책 성공 확인. 이미지 전처리 × 그리퍼 변환 전/후 비교
 tests/test_core.py      GPU 없이 도는 단위 테스트 58개
 ```
 

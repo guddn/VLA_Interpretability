@@ -415,6 +415,59 @@ python scripts/05_plots.py --suite object      # counterfactual 그림
 | 모델은 뜨는데 LIBERO 렌더링만 실패 | EGL 이 다른 GPU 사용 | `[device]` 출력의 `render(EGL)` 이 `model` 과 같은지 확인 |
 | `GPU N 를 요청했지만 보이는 GPU 는 M개` | 번호 범위 초과 | `nvidia-smi` 로 실제 번호 확인 |
 | `사용가능 XGB` 경고 (18GB 미만) | 그 GPU 가 이미 사용 중 | 다른 번호로 `--gpu` 변경 |
+| 렌더링 중 `get_joint_qpos_addr` 에서 메시지 없는 `AssertionError` | mujoco 3.x 가 robosuite 1.4.1 과 비호환 (enum 비교 방식 변경) | `mujoco==2.3.0` 고정 (`constraints.txt`) |
+| `The size of tensor a (291) must match ... (290)` | `predict_action` 이 입력 끝에 토큰 29871 을 덧붙이는데 `attention_mask` 는 붙이기 전 길이 | `attention_mask` 를 빼고 호출 (`pipeline.policy_action`) |
+| **LIBERO 성공률 0%** (팔은 움직이는데 못 집음) | **그리퍼 규약 불일치.** 아래 사례 참고 | `pipeline.libero_env_action` 으로 변환 (`policy_action` 기본 적용). 확인: `scripts/08_policy_sanity.py` |
+
+
+### 사례: LIBERO 성공률 0% — 그리퍼 규약 불일치 (2026-09-29 해결)
+
+**증상.** Stage 3 본 실험(5 task × 3 ep)과 `max_steps=400` 재시도 모두 성공률 0%.
+팔은 물체 쪽으로 움직이지만 집지 못함. 에러 메시지는 없음.
+
+**배제한 원인.** `unnorm_key` — `norm_stats` 키가 `libero_spatial` 하나뿐이라 맞음.
+스텝 수 — 400 스텝에서도 0%.
+
+**원인.** OpenVLA 와 LIBERO 의 그리퍼 규약이 반대입니다.
+
+| | 범위 | 열기 | 닫기 |
+|---|---|---|---|
+| OpenVLA `predict_action` 출력 | [0, 1] | ≈ 1 | ≈ 0 |
+| LIBERO `env.step()` 입력 | [−1, +1] | −1 | +1 |
+
+변환 없이 넣으면 모델이 '닫기(≈0)'를 원할 때 env 는 ≈0 = **무동작**, '열기(≈1)'를 원할 때 **닫기**가 됩니다.
+OpenVLA 공식 평가 코드(`run_libero_eval.py`)는 `normalize_gripper_action(binarize=True)` → `invert_gripper_action` 두 단계를 거치는데, 우리 코드에 이게 빠져 있었습니다.
+
+**조치.** `vlamod/pipeline.py`
+
+```python
+def libero_env_action(action):
+    a[..., -1] = 2.0 * a[..., -1] - 1.0   # [0,1] → [-1,+1]
+    a[..., -1] = np.sign(a[..., -1])      # binarize
+    a[..., -1] *= -1.0                    # invert
+```
+
+`policy_action(..., env_convention=True)` 가 기본으로 적용 → `02_run_analysis`, `04_counterfactual` 모두 반영.
+attention 캡처(teacher-forced)는 이 변환과 무관 — **바뀌는 것은 궤적(=분석 대상 장면)뿐**입니다.
+
+**검증.** `python scripts/08_policy_sanity.py --gpu 5 --tasks 0 --max-steps 220 --variants current rot180_crop --gripper-fix both`
+
+| 조합 | success | steps | 닫기명령 | EE 이동 | 원시 그리퍼 ≈0 / ≈1 / 음수 |
+|---|---|---|---|---|---|
+| current + raw | ✗ | 220 | 17 | 0.539 | 92% / 8% / 0% |
+| current + **grip** | **✓** | **77** | 40 | 0.736 | 52% / 48% / 0% |
+| rot180_crop + raw | ✗ | 220 | 43 | 1.122 | 80% / 20% / 0% |
+| rot180_crop + **grip** | **✓** | **95** | 51 | 0.773 | 54% / 46% / 0% |
+
+- 원시 그리퍼가 0 과 1 에만 몰리고 음수 0% → [0,1] 규약 확정.
+- 변환한 쪽만 성공 → 원인 확정.
+- 이미지 전처리: `current`(180° 회전, crop 없음)와 `rot180_crop` 모두 성공. **task 1개·에피소드 1개라 둘의 우열은 판단 불가.** 기존 분석과 같은 `current` 를 유지합니다.
+
+**기존 데이터에 미치는 영향.**
+- `t = 0` 행: 정책 행동이 한 번도 적용되기 전 장면이므로 **그대로 유효**.
+- `t > 0` 행: 고장 난 그리퍼가 만든 비정상 궤적 위의 장면 → **폐기 후 재수집**. 시간 추세·그룹 분석은 재수집 데이터로만 주장합니다.
+
+**교훈.** 성공률은 전처리·후처리 오류를 잡는 유일한 경험적 검증입니다. 분석 파이프라인을 돌리기 전에 `08_policy_sanity.py` 로 성공 1회를 먼저 확인하세요.
 
 ---
 

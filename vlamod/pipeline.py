@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
 import torch
 
 from . import capture as cap
@@ -16,8 +17,36 @@ from . import metrics as M
 from . import token_index as TI
 
 
+def libero_env_action(action) -> np.ndarray:
+    """OpenVLA 출력 → LIBERO `env.step()` 입력 규약으로 변환.
+
+    !! 이걸 빼먹으면 **팔은 움직이는데 그리퍼가 반대로 작동**해서 성공률이 0% 가 됩니다.
+
+    OpenVLA 는 LIBERO 데이터로 파인튜닝할 때 dataloader 가 그리퍼 부호를 뒤집어
+    (0 = 닫기, 1 = 열기) 학습했습니다. 그래서 `predict_action` 의 그리퍼 출력은
+    [0, 1] 범위이고, LIBERO env 는 [-1, +1] (−1 = 열기, +1 = 닫기) 를 기대합니다.
+
+    OpenVLA 공식 평가 코드(run_libero_eval.py)가 하는 두 단계를 그대로 재현합니다:
+        normalize_gripper_action(binarize=True):  [0,1] → [-1,+1] → sign
+        invert_gripper_action:                    부호 반전
+
+    | 모델 의도 | 모델 출력 | 변환 전 env 동작 | 변환 후 env 동작 |
+    |-----------|-----------|------------------|------------------|
+    | 열기      | ≈ 1       | +1 → **닫기** ❌ | −1 → 열기 ✅     |
+    | 닫기      | ≈ 0       | ≈0 → 무동작 ❌   | +1 → 닫기 ✅     |
+
+    앞 6차원(EE 델타 pose)은 건드리지 않습니다.
+    """
+    a = np.asarray(action, dtype=np.float64).copy()
+    a[..., -1] = 2.0 * (a[..., -1] - 0.0) / (1.0 - 0.0) - 1.0   # [0,1] → [-1,+1]
+    a[..., -1] = np.sign(a[..., -1])                             # binarize
+    a[..., -1] = a[..., -1] * -1.0                               # invert
+    return a
+
+
 @torch.no_grad()
-def policy_action(vla, image, instruction: str, unnorm_key: str):
+def policy_action(vla, image, instruction: str, unnorm_key: str,
+                  env_convention: bool = True):
     """정책이 내는 **연속 action 7차원**. 환경을 한 스텝 진행시킬 때 씁니다.
 
     !! OpenVLA 의 `predict_action` 은 내부에서 input_ids 끝에 토큰 하나(id 29871,
@@ -39,7 +68,11 @@ def policy_action(vla, image, instruction: str, unnorm_key: str):
     prompt, _ = TI.build_prompt(instruction)
     inputs = vla.processor(prompt, image).to(vla.device, dtype=vla.dtype)
     inputs = {k: v for k, v in inputs.items() if k != "attention_mask"}
-    return vla.model.predict_action(**inputs, unnorm_key=unnorm_key, do_sample=False)
+    raw = vla.model.predict_action(**inputs, unnorm_key=unnorm_key, do_sample=False)
+    # env_convention=True(기본): LIBERO env 에 바로 넣을 수 있게 그리퍼 규약 변환.
+    # 이 함수는 **env 를 진행시키는 용도로만** 쓰이므로 기본값이 True 가 맞습니다.
+    # (attention 분석은 teacher_forced_capture 가 하고, 이 출력과 무관합니다)
+    return libero_env_action(raw) if env_convention else np.asarray(raw)
 
 
 @torch.no_grad()
@@ -126,6 +159,15 @@ def analyze_step(
                 # 언어 knockout 이 '같은 개수 랜덤 visual 차단'보다 큰가.
                 # 1보다 커야 언어가 특별하다고 말할 수 있습니다.
                 "lang_vs_control": kl_l / kl_c if kl_c > 0 else float("nan"),
+                # !! lang_vs_control 은 **분모가 0 에 가까워 매우 불안정**합니다.
+                #    실측: KL_control 이 0.036~0.561 로 흔들리자 비율이 12~218 배로
+                #    튀었습니다 (CV 100%). 비율 자체를 통계에 쓰면 안 됩니다.
+                #    → 대조군을 '바닥값'으로 보고 **빼는** 쪽이 안정적입니다.
+                "lang_minus_control": kl_l - kl_c,
+                "vis_minus_control": kl_v - kl_c,
+                # 대조군을 뺀 뒤의 인과 비율. causal_ratio 의 보정판.
+                "causal_ratio_adj": M.causal_ratio(max(kl_l - kl_c, 0.0),
+                                                   max(kl_v - kl_c, 0.0)),
                 "argmax_changed_lang": int(
                     (M.decode_actions(c0.action_logits) != M.decode_actions(c_l.action_logits))
                     .sum()
