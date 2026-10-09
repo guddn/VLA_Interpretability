@@ -58,7 +58,7 @@ class AttentionKnockout:
         layers: Sequence[int] | None = None,
     ):
         """
-        query_idx : 차단할 query 위치 (보통 action token 위치)
+        query_idx : 차단할 query 위치 (보통 spans.query = action 을 예측하는 위치)
         key_idx   : 차단할 key 위치   (보통 language 또는 visual 구간)
         layers    : None 이면 전체 층. 특정 층만 주면 layer-wise knockout.
         """
@@ -117,11 +117,11 @@ class AttentionKnockout:
 
 # ---------------------------------------------------------------------
 def knockout_language(spans, layers=None) -> AttentionKnockout:
-    return AttentionKnockout(spans.action, spans.language, layers=layers)
+    return AttentionKnockout(spans.query, spans.language, layers=layers)
 
 
 def knockout_vision(spans, layers=None) -> AttentionKnockout:
-    return AttentionKnockout(spans.action, spans.visual, layers=layers)
+    return AttentionKnockout(spans.query, spans.visual, layers=layers)
 
 
 def knockout_random_control(spans, seed: int = 0, layers=None) -> AttentionKnockout:
@@ -135,4 +135,4 @@ def knockout_random_control(spans, seed: int = 0, layers=None) -> AttentionKnock
     n = len(spans.language)
     pool = torch.tensor(spans.visual)
     pick = pool[torch.randperm(len(pool), generator=g)[:n]].tolist()
-    return AttentionKnockout(spans.action, pick, layers=layers)
+    return AttentionKnockout(spans.query, pick, layers=layers)

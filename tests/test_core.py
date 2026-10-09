@@ -176,6 +176,9 @@ def test_build_spans_separates_language_from_template():
     assert len(spans.language) >= 3          # pick/up/the/bowl 중 최소 3개
     assert len(spans.action) == 7
     assert spans.action[0] == spans.n_total_prompt
+    # query = action 을 예측하는 자리 = A - 1 (docs/06_metrics.md §7-1)
+    assert spans.query == [a - 1 for a in spans.action]
+    assert spans.query[0] == spans.n_total_prompt - 1
     # 언어와 템플릿이 겹치지 않아야 한다
     assert not (set(spans.language) & set(spans.template))
     # 언어 인덱스는 전부 visual 구간 뒤에 있어야 한다
@@ -489,3 +492,47 @@ def test_language_span_excludes_trailing_question_mark():
     cs, ce = i_end, i_end + 1                # '?'
     s, e = cs, ce
     assert not (s < i_end and e > i_start)
+
+
+# ------------------------------------------------- query 정렬 / 29871 (2026-10-06)
+from vlamod.capture import check_query_rows  # noqa: E402
+
+
+def test_check_query_rows_accepts_prediction_positions():
+    # 프롬프트 290 + action 7 = 297 → action 을 예측하는 행은 289..295
+    check_query_rows(list(range(289, 296)), seq_len=297, n_action=7)
+
+
+def test_check_query_rows_rejects_action_positions():
+    """예전 버그: action 자기 자리(290..296)를 넘기면 거부해야 한다."""
+    with pytest.raises(RuntimeError):
+        check_query_rows(list(range(290, 297)), seq_len=297, n_action=7)
+
+
+def test_append_action_prefix_adds_29871_and_mask():
+    inputs = {"input_ids": torch.tensor([[1, 10, 11]]),
+              "attention_mask": torch.ones(1, 3, dtype=torch.long)}
+    out = TI.append_action_prefix(inputs)
+    assert out["input_ids"].tolist() == [[1, 10, 11, TI.ACTION_PREFIX_TOKEN_ID]]
+    assert out["attention_mask"].shape == (1, 4)
+    # 두 번 불러도 한 번만 붙는다 (predict_action 의 중복 방지 규칙과 동일)
+    out2 = TI.append_action_prefix(out)
+    assert out2["input_ids"].shape == (1, 4)
+
+
+def test_build_spans_with_action_prefix_token():
+    """29871 을 붙인 input_ids 로도 L/T 분리가 유지되고, 29871 은 T 로 분류된다."""
+    instruction = "pick up the bowl"
+    prompt, char_span = TI.build_prompt(instruction)
+    tok = _FakeTokenizer(prompt)
+    n_text = len(tok._offsets)
+    ids = torch.cat([torch.arange(n_text), torch.tensor([TI.ACTION_PREFIX_TOKEN_ID])])
+    spans = TI.build_spans(
+        _FakeVLA(tok), prompt, char_span, ids,
+        visual_span=(1, 9), n_action_tokens=7, sink_positions=(0,),
+    )
+    prefix_pos = spans.n_total_prompt - 1          # 29871 의 절대 위치
+    assert prefix_pos in spans.template
+    assert prefix_pos not in spans.language
+    # DoF 0 을 예측하는 query 가 바로 29871 위치
+    assert spans.query[0] == prefix_pos

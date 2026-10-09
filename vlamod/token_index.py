@@ -27,6 +27,36 @@ import torch
 #    실제 프롬프트를 출력해 주니 눈으로 대조하세요.
 PROMPT_TEMPLATE = "In: What action should the robot take to {instruction}?\nOut:"
 
+# OpenVLA `predict_action` 은 학습 때 입력과 맞추려고 프롬프트 끝(":" 뒤)에
+# 빈 토큰 "▁"(Llama id 29871)를 붙인 뒤 action 을 생성합니다.
+# processor 는 이 토큰을 붙이지 않으므로, 분석 경로도 **직접 붙여야** 정책과 같은 입력이 됩니다.
+# (2026-10-06 이전 분석 경로는 이 토큰 없이 돌았습니다 → docs/06_metrics.md §7-2)
+ACTION_PREFIX_TOKEN_ID = 29871
+
+
+def append_action_prefix(inputs):
+    """processor 출력의 input_ids 끝에 29871 을 붙입니다 (이미 있으면 그대로).
+
+    attention_mask 도 같이 1칸 늘립니다. 한쪽만 늘리면
+    'size of tensor a (291) must match ... (290)' 에러가 납니다.
+    """
+    ids = inputs["input_ids"]
+    if bool((ids[:, -1] == ACTION_PREFIX_TOKEN_ID).all()):
+        return inputs
+    extra = torch.full((ids.shape[0], 1), ACTION_PREFIX_TOKEN_ID, dtype=ids.dtype, device=ids.device)
+    inputs["input_ids"] = torch.cat([ids, extra], dim=1)
+    am = inputs.get("attention_mask", None) if hasattr(inputs, "get") else None
+    if am is not None:
+        ones = torch.ones((am.shape[0], 1), dtype=am.dtype, device=am.device)
+        inputs["attention_mask"] = torch.cat([am, ones], dim=1)
+    return inputs
+
+
+def prepare_inputs(vla, prompt: str, image):
+    """분석·정책 공통 입력: processor → device → 29871 덧붙이기."""
+    inputs = vla.processor(prompt, image).to(vla.device, dtype=vla.dtype)
+    return append_action_prefix(inputs)
+
 
 def build_prompt(instruction: str) -> tuple[str, tuple[int, int]]:
     """프롬프트 문자열과, 그 안에서 instruction 이 차지하는 (start, end) 문자 오프셋."""
@@ -47,14 +77,17 @@ class TokenSpans:
     language: list[int]          # L  (instruction 내용어만)
     template: list[int]          # 템플릿 고정 문구 (분석에서 보통 제외)
     sink: list[int]              # S  (BOS 등)
-    action: list[int]            # A  (teacher-forced 로 붙인 action token)
+    action: list[int]            # A  (teacher-forced 로 붙인 action token 자기 자리)
+    query: list[int]             # Q  (action token 을 **예측하는** 자리 = A - 1)
+                                 #    attention 측정·knockout·logit 은 전부 Q 를 씁니다.
     text_token_strings: list[str]  # 디버깅용
 
     def summary(self) -> str:
         return (
             f"total(prompt)={self.n_total_prompt}  "
             f"|V|={len(self.visual)}  |L|={len(self.language)}  "
-            f"|template|={len(self.template)}  |S|={len(self.sink)}  |A|={len(self.action)}"
+            f"|template|={len(self.template)}  |S|={len(self.sink)}  |A|={len(self.action)}  "
+            f"Q=[{self.query[0]}..{self.query[-1]}]"
         )
 
 
@@ -103,9 +136,15 @@ def token_char_offsets(tokenizer, prompt: str, input_ids: Sequence[int]) -> list
     """각 텍스트 토큰의 (문자 시작, 끝). fast tokenizer 가 아니면 수동 복원."""
     try:
         enc = tokenizer(prompt, return_offsets_mapping=True, add_special_tokens=True)
-        offsets = enc["offset_mapping"]
+        offsets = [tuple(o) for o in enc["offset_mapping"]]
+        # input_ids 끝에 29871 을 덧붙였다면 프롬프트 문자열에는 없는 토큰이므로
+        # 빈 구간 (len, len) 으로 채웁니다 → build_spans 에서 template 으로 분류됨.
+        ids_list = [int(i) for i in input_ids]
+        extra = ids_list[len(offsets):]
+        if extra and all(i == ACTION_PREFIX_TOKEN_ID for i in extra):
+            offsets += [(len(prompt), len(prompt))] * len(extra)
         if len(offsets) == len(input_ids):
-            return [tuple(o) for o in offsets]
+            return offsets
     except Exception:  # noqa: BLE001
         pass
 
@@ -192,6 +231,11 @@ def build_spans(
     visual = list(range(v_start, v_end))
     n_total_prompt = n_text + n_visual
     action = list(range(n_total_prompt, n_total_prompt + n_action_tokens))
+    # !! autoregressive LM 에서 위치 p 의 출력은 p+1 번째 토큰을 예측합니다.
+    #    action 토큰 k 의 분포는 action[k] - 1 위치에서 나오므로,
+    #    attention 측정·knockout·logit 은 모두 이 Q 를 써야 행이 맞습니다.
+    #    (2026-10-06 이전에는 A 를 썼습니다 → DoF 0 의 KL 이 항상 0. docs/06_metrics.md §7-1)
+    query = [a - 1 for a in action]
 
     if not language:
         raise RuntimeError(
@@ -227,6 +271,7 @@ def build_spans(
         template=template,
         sink=[p for p in sink_positions if p < n_total_prompt],
         action=action,
+        query=query,
         text_token_strings=[tokenizer.decode([i], skip_special_tokens=False) for i in ids],
     )
 
@@ -250,4 +295,9 @@ def pretty_print_spans(spans: TokenSpans, max_show: int = 40) -> str:
         if shown >= max_show:
             lines.append("  ... (생략)")
             break
+    # action 토큰은 텍스트가 아니라 generate 후에 붙으므로 위 목록에는 없습니다. 위치만 표시.
+    if spans.action:
+        lines.append(f"  [{spans.action[0]:4d}..{spans.action[-1]:4d}]  A  (action ×{len(spans.action)}, 생성 후 teacher-forcing)")
+    if getattr(spans, "query", None):
+        lines.append(f"  query Q = [{spans.query[0]}..{spans.query[-1]}]  (action 을 예측하는 자리 = A − 1)")
     return "\n".join(lines)

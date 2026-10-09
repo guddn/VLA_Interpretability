@@ -62,11 +62,11 @@ def policy_action(vla, image, instruction: str, unnorm_key: str,
                          the size of tensor b (290) at non-singleton dimension 3
 
        `attention_mask` 를 빼고 넘기면 generate 가 올바른 길이로 새로 만듭니다.
-       (우리 `generate_action_tokens` 는 토큰을 안 붙이므로 이 문제가 없었고,
-        그래서 Stage 2 에서는 드러나지 않았습니다.)
+       (2026-10-06 부터는 `TI.prepare_inputs` 가 29871 과 attention_mask 를 같이 붙이므로
+        predict_action 이 다시 붙이지 않습니다. attention_mask 제거는 안전장치로 남겨 둡니다.)
     """
     prompt, _ = TI.build_prompt(instruction)
-    inputs = vla.processor(prompt, image).to(vla.device, dtype=vla.dtype)
+    inputs = TI.prepare_inputs(vla, prompt, image)   # 29871 포함 — 정책과 같은 입력
     inputs = {k: v for k, v in inputs.items() if k != "attention_mask"}
     raw = vla.model.predict_action(**inputs, unnorm_key=unnorm_key, do_sample=False)
     # env_convention=True(기본): LIBERO env 에 바로 넣을 수 있게 그리퍼 규약 변환.
@@ -90,7 +90,7 @@ def analyze_step(
 ) -> dict[str, Any]:
     """반환: 스칼라 dict (CSV 한 줄) + 'per_layer' 키에 층별 배열."""
     prompt, instr_span = TI.build_prompt(instruction)
-    inputs = vla.processor(prompt, image).to(vla.device, dtype=vla.dtype)
+    inputs = TI.prepare_inputs(vla, prompt, image)   # 29871 포함 — 정책과 같은 입력
 
     if visual_span is None:
         raise ValueError(
@@ -110,7 +110,7 @@ def analyze_step(
     )
 
     base = cap.generate_action_tokens(vla, inputs, n_action=n_action)
-    c0 = cap.teacher_forced_capture(vla, inputs, base, spans.action)
+    c0 = cap.teacher_forced_capture(vla, inputs, base, spans.query)
     r = M.compute_ratios(c0.attn, c0.vnorm, spans.visual, spans.language, spans.sink)
 
     row: dict[str, Any] = {
@@ -142,9 +142,9 @@ def analyze_step(
         ko_v = IV.knockout_vision(spans, layers=layers_subset)
         ko_c = IV.knockout_random_control(spans, seed=control_seed, layers=layers_subset)
 
-        c_l = cap.teacher_forced_capture(vla, inputs, base, spans.action, attn_mask_fn=ko_l.as_fn())
-        c_v = cap.teacher_forced_capture(vla, inputs, base, spans.action, attn_mask_fn=ko_v.as_fn())
-        c_c = cap.teacher_forced_capture(vla, inputs, base, spans.action, attn_mask_fn=ko_c.as_fn())
+        c_l = cap.teacher_forced_capture(vla, inputs, base, spans.query, attn_mask_fn=ko_l.as_fn())
+        c_v = cap.teacher_forced_capture(vla, inputs, base, spans.query, attn_mask_fn=ko_v.as_fn())
+        c_c = cap.teacher_forced_capture(vla, inputs, base, spans.query, attn_mask_fn=ko_c.as_fn())
 
         kl_l = float(M.action_kl(c0.action_logits, c_l.action_logits))
         kl_v = float(M.action_kl(c0.action_logits, c_v.action_logits))
@@ -200,12 +200,12 @@ def counterfactual_instruction(
     outs = {}
     for tag, instr in (("a", instruction_a), ("b", instruction_b)):
         prompt, span = TI.build_prompt(instr)
-        inputs = vla.processor(prompt, image).to(vla.device, dtype=vla.dtype)
+        inputs = TI.prepare_inputs(vla, prompt, image)   # 29871 포함 — 정책과 같은 입력
         spans = TI.build_spans(
             vla, prompt, span, inputs["input_ids"][0], visual_span, n_action_tokens=n_action
         )
         ids = cap.generate_action_tokens(vla, inputs, n_action=n_action)
-        c = cap.teacher_forced_capture(vla, inputs, ids, spans.action)
+        c = cap.teacher_forced_capture(vla, inputs, ids, spans.query)
         outs[tag] = c
 
     kl = float(M.action_kl(outs["a"].action_logits, outs["b"].action_logits))

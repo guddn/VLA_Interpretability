@@ -11,6 +11,7 @@ VLA(OpenVLA)에서 **action token 이 image token 과 language token 을 어떤 
 | [`docs/03_new_server_setup.md`](docs/03_new_server_setup.md) | **새 서버에 처음부터 세팅** (conda 부터) |
 | [`docs/04_rendering_pipeline.md`](docs/04_rendering_pipeline.md) | 픽셀이 만들어져 visual token 이 되기까지 (패키지별 역할) |
 | [`docs/05_interventions.md`](docs/05_interventions.md) | 인과 개입 설계 — **어디에 개입하는가**로 분류 |
+| [`docs/06_metrics.md`](docs/06_metrics.md) | 지표 정의 — CSV 컬럼 사전, 수식, 알려진 구현 문제 |
 
 ## 검증하는 가설
 
@@ -257,7 +258,7 @@ scripts/
   05_plots.py                      그림 4장
   07_dump_model_input.py           모델이 실제로 받은 이미지(pixel_values) PNG 로 복원
   08_policy_sanity.py   ★ 선행    정책 성공 확인. 이미지 전처리 × 그리퍼 변환 전/후 비교
-tests/test_core.py      GPU 없이 도는 단위 테스트 58개
+tests/test_core.py      GPU 없이 도는 단위 테스트 65개
 ```
 
 ### 산출물

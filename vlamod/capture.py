@@ -52,6 +52,20 @@ def _register_value_hooks(vla: LoadedVLA, store: dict):
 
 
 # ---------------------------------------------------------------------
+def check_query_rows(rows: list[int], seq_len: int, n_action: int) -> None:
+    """query 행이 '마지막 n_action 개 토큰을 예측하는 자리' 와 정확히 같은지 검증.
+
+    시퀀스 = [... 프롬프트 ...][action × n_action] 이므로
+    기대값은 [seq_len - n_action - 1, ..., seq_len - 2] 입니다.
+    """
+    expected = list(range(seq_len - n_action - 1, seq_len - 1))
+    if list(rows) != expected:
+        raise RuntimeError(
+            f"query 행 {list(rows)} 가 기대값 {expected} 와 다릅니다 (seq_len={seq_len}). "
+            "spans.action 이 아니라 spans.query 를 넘겼는지, visual 삽입 위치 가정이 맞는지 확인하세요."
+        )
+
+
 @torch.no_grad()
 def generate_action_tokens(vla: LoadedVLA, inputs, n_action: int = 7) -> torch.Tensor:
     """greedy 로 action token n개 생성."""
@@ -80,11 +94,14 @@ def teacher_forced_capture(
     vla: LoadedVLA,
     inputs,
     action_ids: torch.Tensor,
-    action_positions: list[int],
+    query_positions: list[int],
     n_bins: int = 256,
     attn_mask_fn=None,
 ) -> Capture:
     """[prompt + action] 전체를 한 번에 forward 하면서 attention/value 캡처.
+
+    query_positions: action token 을 **예측하는** 위치 (`spans.query`).
+      attention 행, logit 행 모두 이 위치를 씁니다 (한 칸 밀린 행을 쓰지 않도록).
 
     attn_mask_fn: 개입용. vlamod.intervene 에서 주입합니다. None 이면 무개입.
     """
@@ -123,12 +140,8 @@ def teacher_forced_capture(
     n_heads = out.attentions[0].shape[1]
     seq_len = out.attentions[0].shape[-1]
 
-    rows = torch.tensor(action_positions, dtype=torch.long)
-    if rows.max().item() >= seq_len:
-        raise RuntimeError(
-            f"action 위치 {rows.max().item()} 가 시퀀스 길이 {seq_len} 를 벗어납니다. "
-            "token_index 의 visual 삽입 위치 가정이 틀렸을 수 있습니다."
-        )
+    rows = torch.tensor(query_positions, dtype=torch.long)
+    check_query_rows(rows.tolist(), seq_len, int(action_ids.numel()))
 
     attn = torch.stack(
         [a[0, :, rows, :].float().cpu() for a in out.attentions], dim=0
@@ -136,9 +149,8 @@ def teacher_forced_capture(
 
     vnorm = torch.stack([vstore[i] for i in range(n_layers)], dim=0)  # [L, H, T]
 
-    # action logits: 위치 p 의 토큰을 예측하는 logits 는 index p-1
-    pred_rows = rows - 1
-    logits = out.logits[0][pred_rows].float().cpu()          # [n_action, vocab]
+    # action logits: query 위치의 출력이 곧 다음 action 토큰의 분포
+    logits = out.logits[0][rows].float().cpu()               # [n_action, vocab]
     action_logits = action_logit_slice(logits, vla.tokenizer, n_bins=n_bins)
 
     return Capture(

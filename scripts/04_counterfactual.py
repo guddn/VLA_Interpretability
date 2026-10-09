@@ -82,11 +82,11 @@ def one_condition(vla, image, instruction, vspan, cfg, force_ids=None):
       - 두 스크립트의 KL 을 같은 표에 놓으려면 규약이 같아야 합니다.
         그래서 기본값을 'shared'(valid 의 토큰을 전 조건에 공유)로 둡니다.
 
-    !! 조건마다 |L| 이 달라 **토큰 위치(spans.action)는 조건별로 다시 계산**됩니다.
+    !! 조건마다 |L| 이 달라 **토큰 위치(spans.query)는 조건별로 다시 계산**됩니다.
        공유하는 건 위치가 아니라 action token **id 7개** 입니다.
     """
     prompt, span = TI.build_prompt(instruction) if instruction.strip() else TI.build_prompt(" ")
-    inputs = vla.processor(prompt, image).to(vla.device, dtype=vla.dtype)
+    inputs = TI.prepare_inputs(vla, prompt, image)   # 29871 포함
     spans = TI.build_spans(
         vla, prompt, span, inputs["input_ids"][0], vspan,
         n_action_tokens=7,
@@ -94,7 +94,7 @@ def one_condition(vla, image, instruction, vspan, cfg, force_ids=None):
         instruction_only=cfg["tokens"]["instruction_only"],
     )
     ids = force_ids if force_ids is not None else cap.generate_action_tokens(vla, inputs, n_action=7)
-    c = cap.teacher_forced_capture(vla, inputs, ids, spans.action)
+    c = cap.teacher_forced_capture(vla, inputs, ids, spans.query)
     r = M.compute_ratios(c.attn, c.vnorm, spans.visual, spans.language, spans.sink)
     return c, r, spans, ids
 

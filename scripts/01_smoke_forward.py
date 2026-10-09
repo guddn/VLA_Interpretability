@@ -101,6 +101,10 @@ def main() -> int:
         img_a = EL.obs_to_image(obs)
         obs = EL.step_noop(task, 20)
         img_b = EL.obs_to_image(obs)
+        # 이미지만 얻으면 env 는 더 필요 없습니다. 여기서 닫지 않으면 프로세스 종료 때
+        # EGL display 가 먼저 해제된 뒤 렌더 컨텍스트를 지우려다
+        # 'EGLError: EGL_NOT_INITIALIZED (eglDestroyContext)' 가 찍힙니다 (결과에는 무해).
+        task.env.close()
         print(f"  instruction: {instruction!r}")
         img_a.save("outputs/smoke_libero_view.png")
         print("  → outputs/smoke_libero_view.png 를 열어서 **상하가 맞는지** 확인하세요.")
@@ -114,8 +118,9 @@ def main() -> int:
     print(f"  instruction 문자 구간: {instr_span} → {prompt[instr_span[0]:instr_span[1]]!r}")
 
     proc = vla.processor
-    inputs_a = proc(prompt, img_a).to(vla.device, dtype=vla.dtype)
-    inputs_b = proc(prompt, img_b).to(vla.device, dtype=vla.dtype)
+    # 29871 덧붙이기 — 정책(predict_action)과 같은 입력 (docs/06_metrics.md §7-2)
+    inputs_a = TI.append_action_prefix(proc(prompt, img_a).to(vla.device, dtype=vla.dtype))
+    inputs_b = TI.append_action_prefix(proc(prompt, img_b).to(vla.device, dtype=vla.dtype))
 
     # ---- visual span 실측 ---------------------------------------------
     print("\n[3] visual 토큰 구간 실측 (이미지만 바꿔서 embedding 차이 확인)")
@@ -154,7 +159,8 @@ def main() -> int:
 
     # ---- 캡처 -----------------------------------------------------------
     print("\n[6] teacher-forced 캡처")
-    c = cap.teacher_forced_capture(vla, inputs_a, action_ids, spans.action)
+    c = cap.teacher_forced_capture(vla, inputs_a, action_ids, spans.query)
+    print(f"  query 행 (action 을 예측하는 자리): {spans.query}  ← A {spans.action} 보다 1칸 앞")
     print(f"  attn  : {tuple(c.attn.shape)}   (L, H, n_action, T)")
     print(f"  vnorm : {tuple(c.vnorm.shape)}")
     print(f"  logits: {tuple(c.action_logits.shape)}")
