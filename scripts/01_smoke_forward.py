@@ -168,6 +168,12 @@ def main() -> int:
 
     row_sum = c.attn.sum(dim=-1)
     print(f"  attention 행 합 (1.0 이어야 함): min={row_sum.min():.4f} max={row_sum.max():.4f}")
+    # Q 행 검증: [5] 의 토큰은 greedy(최댓값 선택)로 만들었으므로,
+    # **올바른 예측 행**의 logits argmax 는 그 토큰과 정확히 같아야 합니다.
+    # Q 가 한 칸이라도 밀려 있으면 대부분 어긋납니다.
+    pred_ids = c.action_logits.argmax(dim=-1).cpu() + lo
+    n_match = int((pred_ids == action_ids.cpu()).sum())
+    print(f"  Q 행 argmax == 생성한 action 토큰: {n_match}/7  ← 7/7 이어야 Q 위치가 맞음")
 
     # ---- 지표 -----------------------------------------------------------
     print("\n[7] 비율 지표")
@@ -187,7 +193,7 @@ def main() -> int:
     )
     print("\n저장: outputs/smoke_capture.pt")
     print("=" * 70)
-    print("전부 통과했으면 scripts/02_attention_ratio.py 로 넘어가세요.")
+    print("전부 통과했으면 scripts/02_run_analysis.py 로 넘어가세요.")
     return 0 if ok else 1
 
 

@@ -1,0 +1,1050 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenVLA 이미지·언어 사용 비율 연구</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+/* 이미지=파랑, 지시문=주황, 행동=검정, 구조 토큰(BOS·템플릿)=무채색 — 전 슬라이드 공통 규칙 */
+:root {
+  --bg: #e9ecf0; --slide: #ffffff; --ink: #14171c; --ink-2: #464c5a; --muted: #6a7180;
+  --rule: #dbdfe6; --tint: #f3f5f8;
+  --vision: #2a78d6; --lang: #eb6834; --sink: #8b93a3; --tmpl: #b7bdc8; --action: #14171c;
+  --vision-bg: #e3eefb; --lang-bg: #fdebe2;
+  --ok: #17693f; --ok-bg: #e2f1e8; --warn: #8a5300; --warn-bg: #fbeed6; --bad: #a32b2b; --bad-bg: #f8e1e1;
+  --shadow: 0 1px 2px rgba(20,23,28,.06), 0 8px 24px rgba(20,23,28,.07);
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d0f13; --slide: #171a20; --ink: #eceef2; --ink-2: #b4b9c5; --muted: #8b92a1;
+    --rule: #2a2e37; --tint: #1e2229;
+    --vision: #3987e5; --lang: #e0652f; --sink: #6e7686; --tmpl: #4d5360; --action: #eceef2;
+    --vision-bg: #172636; --lang-bg: #33201a;
+    --ok: #6fd3a0; --ok-bg: #143023; --warn: #f2bd62; --warn-bg: #33270f; --bad: #f08a8a; --bad-bg: #3a1a1a;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d0f13; --slide: #171a20; --ink: #eceef2; --ink-2: #b4b9c5; --muted: #8b92a1;
+  --rule: #2a2e37; --tint: #1e2229;
+  --vision: #3987e5; --lang: #e0652f; --sink: #6e7686; --tmpl: #4d5360; --action: #eceef2;
+  --vision-bg: #172636; --lang-bg: #33201a;
+  --ok: #6fd3a0; --ok-bg: #143023; --warn: #f2bd62; --warn-bg: #33270f; --bad: #f08a8a; --bad-bg: #3a1a1a;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); padding: 0 16px 48px; }
+.mono, .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+b, strong { font-weight: 600; }
+
+/* ---------- toolbar ---------- */
+.bar { position: sticky; top: 0; z-index: 5; max-width: 1152px; margin: 0 auto; display: flex; align-items: center; gap: 12px; padding-block: 12px; background: var(--bg); }
+.bar-title { font-weight: 600; font-size: 14px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar-count { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.btn { font: 500 13px var(--sans); color: var(--ink); background: var(--slide); border: 1px solid var(--rule); border-radius: 7px; padding: 6px 12px; cursor: pointer; }
+.btn:hover { border-color: var(--muted); }
+.btn:focus-visible { outline: 2px solid var(--vision); outline-offset: 2px; }
+.btn-primary { background: var(--ink); color: var(--slide); border-color: var(--ink); }
+
+/* ---------- deck ---------- */
+.deck { max-width: 1152px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+.slide { container-type: inline-size; position: relative; aspect-ratio: 16 / 9; background: var(--slide); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden; scroll-margin-top: 64px; }
+.inner { position: absolute; inset: 0; font-size: 1.52cqi; line-height: 1.5; padding: 4cqi 5cqi 2.6cqi; display: flex; flex-direction: column; gap: 1em; }
+.slide.dense .inner { font-size: 1.38cqi; gap: .85em; }
+.head { display: flex; flex-direction: column; gap: .35em; }
+.eyebrow { font-size: .74em; font-weight: 700; letter-spacing: .08em; color: var(--muted); }
+.eyebrow .part { color: var(--vision); }
+h1, h2, h3 { margin: 0; font-weight: 700; letter-spacing: -.01em; line-height: 1.22; text-wrap: balance; }
+h1 { font-size: 2.6em; }
+h2 { font-size: 1.85em; }
+h3 { font-size: 1.05em; }
+.lede { margin: 0; font-size: 1.08em; color: var(--ink-2); max-width: 52em; }
+p { margin: 0; }
+ul, ol { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: .3em; }
+li::marker { color: var(--muted); }
+.body { flex: 1; min-height: 0; display: grid; gap: 2em; align-content: start; }
+.foot { margin-top: auto; display: flex; justify-content: space-between; gap: 1em; font-size: .68em; color: var(--muted); font-family: var(--mono); padding-top: .6em; border-top: 1px solid var(--rule); }
+.foot span:last-child { white-space: nowrap; }
+.c2 { grid-template-columns: 1fr 1fr; }
+.c2w { grid-template-columns: 1.25fr 1fr; }
+.c3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.c4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.col { display: flex; flex-direction: column; gap: .9em; min-width: 0; }
+.cap { font-size: .76em; color: var(--muted); line-height: 1.45; }
+.takeaway { font-weight: 500; background: var(--tint); border-radius: 8px; padding: .75em 1em; line-height: 1.5; }
+.takeaway b { font-weight: 700; }
+.note { font-size: .82em; color: var(--ink-2); border-left: 3px solid var(--rule); padding-left: .8em; }
+.sw { display: inline-block; width: .78em; height: .78em; border-radius: 2px; vertical-align: -.04em; margin-right: .3em; }
+.v { color: var(--vision); font-weight: 600; }
+.l { color: var(--lang); font-weight: 600; }
+code, .code { font-family: var(--mono); font-size: .9em; background: var(--tint); padding: .05em .35em; border-radius: 4px; white-space: nowrap; }
+
+/* ---------- cards ---------- */
+.card { border: 1px solid var(--rule); border-radius: 9px; padding: .8em 1em; display: flex; flex-direction: column; gap: .45em; min-width: 0; }
+.card h3 { display: flex; align-items: baseline; gap: .5em; flex-wrap: wrap; }
+.card .id { font-family: var(--mono); font-size: .78em; color: var(--muted); font-weight: 500; }
+.card p, .card li { font-size: .9em; color: var(--ink-2); }
+.card p b, .card li b { color: var(--ink); }
+.card .so { font-size: .86em; color: var(--ink); background: var(--tint); border-radius: 6px; padding: .4em .6em; margin-top: auto; }
+.card.blue { border-color: var(--vision); }
+.card.orange { border-color: var(--lang); }
+
+/* ---------- chips ---------- */
+.chip { display: inline-flex; align-items: center; gap: .35em; font-size: .72em; font-weight: 600; padding: .15em .6em; border-radius: 999px; white-space: nowrap; }
+.chip::before { content: ""; width: .5em; height: .5em; border-radius: 50%; background: currentColor; }
+.ok { color: var(--ok); background: var(--ok-bg); }
+.warn { color: var(--warn); background: var(--warn-bg); }
+.bad { color: var(--bad); background: var(--bad-bg); }
+.idle { color: var(--muted); background: var(--tint); }
+
+/* ---------- tables ---------- */
+table.t { width: 100%; border-collapse: collapse; font-size: .86em; }
+table.t th { text-align: left; font-size: .82em; color: var(--muted); font-weight: 600; padding: 0 .7em .45em 0; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+table.t td { padding: .45em .7em .45em 0; border-bottom: 1px solid var(--rule); vertical-align: top; line-height: 1.42; }
+table.t td.n, table.t th.n { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.t td.f { font-family: var(--mono); font-size: .92em; white-space: nowrap; color: var(--ink); }
+table.t tr:last-child td { border-bottom: 0; }
+table.t .sub { color: var(--muted); font-size: .9em; }
+table.t td.hl { background: var(--ok-bg); }
+
+/* ---------- token strip ---------- */
+.strip { display: flex; gap: 2px; height: 2.5em; }
+.seg { min-width: 3px; border-radius: 3px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 600; font-size: .86em; white-space: nowrap; overflow: hidden; }
+.seg.t { color: var(--ink); }
+.strip-l { display: flex; justify-content: space-between; font-size: .76em; color: var(--muted); margin-bottom: .4em; }
+.toks { display: flex; flex-wrap: wrap; gap: .3em; font-family: var(--mono); font-size: .8em; }
+.tok { padding: .2em .45em; border-radius: 4px; border: 1px solid var(--rule); background: var(--tint); white-space: nowrap; }
+.tok i { font-style: normal; color: var(--muted); font-size: .82em; margin-right: .3em; }
+.tok.L { background: var(--lang-bg); border-color: var(--lang); }
+.tok.A { background: var(--action); color: var(--slide); border-color: var(--action); }
+.tok.A i { color: var(--tmpl); }
+.tok.S { background: var(--sink); color: #fff; border-color: var(--sink); }
+.tok.S i { color: #e6e8ec; }
+.tok.Q { outline: 2px solid var(--vision); outline-offset: 1px; }
+
+/* ---------- flow diagram ---------- */
+.flow { display: grid; align-items: center; gap: .7em; }
+.box { border: 1.5px solid var(--rule); border-radius: 8px; padding: .55em .75em; font-size: .9em; line-height: 1.35; background: var(--slide); min-width: 0; }
+.box small { display: block; color: var(--muted); font-size: .82em; margin-top: .15em; }
+.box.b-v { border-color: var(--vision); background: var(--vision-bg); }
+.box.b-l { border-color: var(--lang); background: var(--lang-bg); }
+.box.b-a { border-color: var(--action); }
+.box.b-core { border-color: var(--ink-2); background: var(--tint); }
+.arr { color: var(--muted); font-size: 1.2em; text-align: center; }
+
+/* ---------- mass bar ---------- */
+.mbar { display: flex; gap: 2px; height: 3em; }
+.mbar .seg { font-family: var(--mono); font-weight: 500; font-size: .86em; }
+.legend { display: grid; grid-template-columns: auto 1fr auto; column-gap: 1em; row-gap: .3em; font-size: .86em; align-items: center; }
+.legend .n { font-family: var(--mono); text-align: right; }
+
+/* ---------- stats ---------- */
+.stats { display: flex; flex-direction: column; gap: .9em; }
+.stat { display: grid; grid-template-columns: 5.6em 1fr; gap: .9em; align-items: baseline; }
+.stat-v { font-family: var(--mono); font-weight: 500; font-size: 1.9em; letter-spacing: -.02em; line-height: 1; white-space: nowrap; }
+.stat-v small { font-size: .5em; color: var(--muted); letter-spacing: 0; }
+.stat-l { font-size: .9em; color: var(--ink-2); line-height: 1.45; }
+.stat-l b { color: var(--ink); }
+
+/* ---------- KL bars ---------- */
+.kl { display: flex; flex-direction: column; gap: .8em; }
+.kl-row { display: grid; grid-template-columns: 10.5em 1fr; gap: 1em; align-items: center; }
+.kl-name { font-size: .9em; line-height: 1.3; }
+.kl-name small { display: block; color: var(--muted); font-size: .84em; }
+.kl-track { position: relative; height: 1.8em; }
+.kl-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 0 4px 4px 0; }
+.kl-val { position: absolute; top: 50%; transform: translateY(-50%); font-family: var(--mono); font-size: .88em; font-weight: 500; padding-left: .5em; white-space: nowrap; }
+
+/* ---------- formula ---------- */
+.formula { font-family: var(--mono); font-size: .92em; background: var(--tint); border-radius: 7px; padding: .55em .8em; line-height: 1.6; }
+.formula .l, .formula .v { font-weight: 600; }
+
+/* ---------- step list ---------- */
+.steps { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: .5em; counter-reset: s; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 1.8em 1fr; gap: .6em; align-items: start; font-size: .9em; line-height: 1.42; }
+.steps li::before { content: counter(s); display: grid; place-items: center; width: 1.6em; height: 1.6em; border-radius: 50%; background: var(--ink); color: var(--slide); font-family: var(--mono); font-size: .82em; font-weight: 600; margin-top: .05em; }
+.steps li small { display: block; color: var(--muted); }
+.steps.tagged li::before { content: attr(data-n); font-size: .7em; border-radius: 5px; width: 2.3em; }
+.steps.tagged li { grid-template-columns: 2.4em 1fr; }
+
+/* ---------- agenda ---------- */
+.agenda { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1em; }
+.ag { border-top: 3px solid var(--ink); padding-top: .6em; display: flex; flex-direction: column; gap: .3em; }
+.ag .k { font-family: var(--mono); font-size: .76em; color: var(--muted); }
+.ag .h { font-weight: 700; font-size: 1.02em; }
+.ag p { font-size: .84em; color: var(--ink-2); }
+
+/* ---------- position diagram ---------- */
+.pos { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: .3em; font-family: var(--mono); font-size: .78em; text-align: center; }
+.pos .p { border: 1px solid var(--rule); border-radius: 5px; padding: .35em .1em; background: var(--tint); }
+.pos .p.A { background: var(--action); color: var(--slide); border-color: var(--action); }
+.pos .p.Q { outline: 2px solid var(--vision); outline-offset: 1px; }
+.pos .k { color: var(--muted); font-size: .9em; }
+.pos .ar { color: var(--vision); font-size: .95em; }
+
+/* ---------- present mode ---------- */
+body.presenting { overflow: hidden; }
+body.presenting .bar { display: none; }
+body.presenting .deck { position: fixed; inset: 0; max-width: none; margin: 0; z-index: 10; background: var(--bg); display: grid; place-items: center; padding: 0; gap: 0; }
+body.presenting .slide { display: none; border-radius: 0; box-shadow: none; }
+body.presenting .slide.is-current { display: block; width: min(100vw, calc(100vh * 16 / 9)); }
+.hint { display: none; }
+body.presenting .hint { display: block; position: fixed; right: 16px; bottom: 12px; z-index: 11; font: 12px var(--mono); color: var(--muted); }
+
+/* ---------- narrow screens ---------- */
+@media (max-width: 760px) {
+  .slide { aspect-ratio: auto; }
+  .inner, .slide.dense .inner { position: static; font-size: 15px; padding: 22px 18px 18px; gap: 16px; }
+  h1 { font-size: 1.7em; } h2 { font-size: 1.35em; }
+  .c2, .c2w, .c3, .c4, .agenda { grid-template-columns: 1fr; }
+  .flow { grid-template-columns: 1fr !important; }
+  .arr { transform: rotate(90deg); }
+  .pos { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .present-btn { display: none; }
+  table.t { display: block; overflow-x: auto; }
+  .kl-row { grid-template-columns: 8em 1fr; }
+}
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+.stats.wide .stat { grid-template-columns: 7.4em 1fr; }
+.body.top { align-items: start; }
+
+</style>
+</head>
+<body>
+<div class="bar" role="toolbar" aria-label="슬라이드 이동">
+  <div class="bar-title">OpenVLA 이미지·언어 사용 비율 연구 — 전체 정리</div>
+  <span class="bar-count" id="count">01 / 29</span>
+  <button class="btn" id="prev" type="button" aria-label="이전 슬라이드">이전</button>
+  <button class="btn" id="next" type="button" aria-label="다음 슬라이드">다음</button>
+  <button class="btn btn-primary present-btn" id="present" type="button">발표 모드</button>
+</div>
+<main class="deck" id="deck">
+<!-- ============ 1 표지 ============ -->
+<section class="slide" aria-label="표지">
+ <div class="inner">
+  <div class="head" style="margin-top:2.2em">
+   <div class="eyebrow">VLA INTERPRETABILITY · 연구 진행 정리 · 2026-10-13 · 김형우</div>
+   <h1>OpenVLA는 이미지와 지시문을<br>어떻게 나눠 쓰는가</h1>
+  </div>
+  <p class="lede">로봇이 행동을 정할 때 <span class="v">눈(카메라 이미지)</span>과 <span class="l">귀(지시문)</span> 중 무엇에 얼마나 기대는지 재고, 그 비율을 attention으로 재는 방식이 믿을 만한지까지 확인하는 연구입니다. 선행연구부터 코드 구조, 지금까지의 결과와 시행착오를 처음 보는 사람 기준으로 정리했습니다.</p>
+  <div class="body c4" style="margin-top:auto">
+   <div class="col"><span class="cap">모델</span><b>OpenVLA-7B</b><span class="cap">LIBERO-Spatial 파인튜닝 체크포인트</span></div>
+   <div class="col"><span class="cap">환경</span><b>LIBERO 시뮬레이션</b><span class="cap">로봇 팔 조작 과제, 5개 task</span></div>
+   <div class="col"><span class="cap">방법</span><b>관찰 + 인과 개입</b><span class="cap">attention 비율 vs attention knockout</span></div>
+   <div class="col"><span class="cap">현재</span><b>Stage 3 재수집 직전</b><span class="cap">분석 경로 버그 2건 수정 완료</span></div>
+  </div>
+  <div class="foot"><span>표지</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 2 순서 ============ -->
+<section class="slide" aria-label="오늘의 순서">
+ <div class="inner">
+  <div class="head"><div class="eyebrow">오늘의 순서</div><h2>여덟 단계로 따라갑니다</h2></div>
+  <div class="agenda">
+   <div class="ag"><span class="k">PART 1</span><span class="h">기초 개념</span><p>VLA, 토큰, attention이 무엇인지</p></div>
+   <div class="ag"><span class="k">PART 2</span><span class="h">선행연구</span><p>"VLA는 언어를 잘 안 쓴다"와 "attention은 믿을 수 있나"</p></div>
+   <div class="ag"><span class="k">PART 3</span><span class="h">연구 질문</span><p>아직 비어 있는 두 가지 — H1, H2</p></div>
+   <div class="ag"><span class="k">PART 4</span><span class="h">측정 방법</span><p>attention 비율 3종, knockout과 KL</p></div>
+   <div class="ag"><span class="k">PART 5</span><span class="h">코드 구조</span><p>setup / scripts / vlamod 파일별 역할</p></div>
+   <div class="ag"><span class="k">PART 6</span><span class="h">결과</span><p>관찰, 개입, H2 첫 신호</p></div>
+   <div class="ag"><span class="k">PART 7</span><span class="h">시행착오</span><p>환경 구축, 성공률 0%, 분석 경로 버그</p></div>
+   <div class="ag"><span class="k">PART 8</span><span class="h">정리와 다음 단계</span><p>무엇이 확실하고 무엇이 남았나</p></div>
+  </div>
+  <div class="takeaway" style="margin-top:auto">한 줄 요약 — <b>지시문 토큰 20개를 가리는 효과가 이미지 토큰 256개를 가리는 효과와 비슷할 만큼 크지만, attention 비율은 그 크기를 약하게만 따라간다</b>는 첫 신호를 얻었고, 지금은 이를 정확한 코드로 다시 확인하는 단계입니다.</div>
+  <div class="foot"><span>오늘의 순서</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 3 VLA란 ============ -->
+<section class="slide" aria-label="VLA란 무엇인가">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 1</span> · 기초 개념</div><h2>VLA = 사진과 지시문을 받아 로봇 행동을 내는 모델</h2>
+   <p class="lede">Vision-Language-Action. 거대 언어모델이 "다음 단어"를 맞히듯, OpenVLA는 "다음 <b>행동 토큰</b>"을 맞힙니다.</p></div>
+  <div class="flow" style="grid-template-columns: 1.1fr auto 1.1fr auto 1.1fr auto 1.2fr">
+   <div class="box b-v"><b>카메라 이미지</b><small>로봇 앞 장면 224×224</small></div>
+   <div class="arr">→</div>
+   <div class="box b-v"><b>비전 인코더</b><small>DINOv2 + SigLIP 두 개를 합침</small></div>
+   <div class="arr">→</div>
+   <div class="box b-v"><b>이미지 토큰 256개</b><small>패치 하나 = 토큰 하나</small></div>
+   <div class="arr">↘</div>
+   <div class="box b-core" style="grid-row: span 2"><b>Llama-2 7B</b><small>32층 × 32헤드. 모든 토큰을 한 줄로 이어 읽고 다음 토큰을 예측</small></div>
+   <div class="box b-l"><b>지시문</b><small>"pick up the black bowl …"</small></div>
+   <div class="arr">→</div>
+   <div class="box b-l"><b>토크나이저</b><small>단어를 조각으로 자름</small></div>
+   <div class="arr">→</div>
+   <div class="box b-l"><b>텍스트 토큰</b><small>템플릿 + 지시문 (task 0: 지시문 20개)</small></div>
+   <div class="arr">↗</div>
+  </div>
+  <div class="body c2w" style="margin-top:.4em">
+   <div class="col">
+    <h3>출력: 행동 토큰 7개 = 로봇 팔 한 번의 움직임</h3>
+    <div class="toks">
+     <span class="tok A"><i>0</i>x 이동</span><span class="tok A"><i>1</i>y 이동</span><span class="tok A"><i>2</i>z 이동</span><span class="tok A"><i>3</i>roll</span><span class="tok A"><i>4</i>pitch</span><span class="tok A"><i>5</i>yaw</span><span class="tok A"><i>6</i>그리퍼</span>
+    </div>
+    <p class="cap">각 값(DoF, 자유도)을 −1~+1 범위의 <b>256칸(bin)</b>으로 나누고, 그중 한 칸을 고르는 문제로 바꿨습니다. 그래서 "행동"도 단어처럼 확률분포를 갖고, 이 분포가 얼마나 바뀌는지를 숫자로 잴 수 있습니다.</p>
+   </div>
+   <div class="col">
+    <div class="takeaway">한 스텝 = 사진 한 장 + 지시문 → 행동 7개 → 시뮬레이터가 팔을 움직임 → 다시 사진. 과제 하나를 끝내는 데 보통 <b>80~140 스텝</b>이 걸립니다.</div>
+   </div>
+  </div>
+  <div class="foot"><span>PART 1 · 기초 개념</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 4 토큰 ============ -->
+<section class="slide" aria-label="한 스텝의 입력 토큰">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 1</span> · 기초 개념</div><h2>한 스텝의 입력은 토큰 298개를 한 줄로 이은 것</h2>
+   <p class="lede">이 연구의 모든 계산은 "이 줄에서 어느 칸이 이미지이고 어느 칸이 지시문인가"를 정확히 아는 데서 시작합니다. (task 0 기준)</p></div>
+  <div>
+   <div class="strip-l"><span>전체 298토큰 — 칸 너비가 토큰 수에 비례</span><span>이미지 86% · 지시문 7%</span></div>
+   <div class="strip" role="img" aria-label="BOS 1, 이미지 256, 템플릿 9, 지시문 20, 템플릿 5, 행동 7">
+    <div class="seg" style="flex:1;background:var(--sink)"></div>
+    <div class="seg" style="flex:256;background:var(--vision)">이미지 256</div>
+    <div class="seg t" style="flex:9;background:var(--tmpl)"></div>
+    <div class="seg" style="flex:20;background:var(--lang)"></div>
+    <div class="seg t" style="flex:5;background:var(--tmpl)"></div>
+    <div class="seg" style="flex:7;background:var(--action)"></div>
+   </div>
+  </div>
+  <div class="col">
+   <h3>텍스트 부분을 확대하면 (위치 번호 · 토큰)</h3>
+   <div class="toks">
+    <span class="tok S"><i>0</i>&lt;s&gt;</span>
+    <span class="tok" style="background:var(--vision-bg);border-color:var(--vision)"><i>1–256</i>이미지 패치 ×256</span>
+    <span class="tok"><i>257</i>In</span><span class="tok"><i></i>:</span><span class="tok">What</span><span class="tok">action</span><span class="tok">should</span><span class="tok">the</span><span class="tok">robot</span><span class="tok">take</span><span class="tok"><i>265</i>to</span>
+    <span class="tok L"><i>266</i>pick</span><span class="tok L">up</span><span class="tok L">the</span><span class="tok L">black</span><span class="tok L">bow</span><span class="tok L">l</span><span class="tok L">between</span><span class="tok L">the</span><span class="tok L">plate</span><span class="tok L">and</span><span class="tok L">the</span><span class="tok L">r</span><span class="tok L">ame</span><span class="tok L">kin</span><span class="tok L">and</span><span class="tok L">place</span><span class="tok L">it</span><span class="tok L">on</span><span class="tok L">the</span><span class="tok L"><i>285</i>plate</span>
+    <span class="tok"><i>286</i>?</span><span class="tok">\n</span><span class="tok">Out</span><span class="tok"><i>289</i>:</span><span class="tok"><i>290</i>▁</span>
+    <span class="tok A"><i>291–297</i>행동 ×7</span>
+   </div>
+  </div>
+  <div class="body c3" style="margin-top:auto">
+   <div class="card"><h3><span class="sw" style="background:var(--sink)"></span>S · sink (BOS)</h3><p>문장 시작 기호. 내용은 없지만 attention이 크게 몰리는 "쓰레기통" 역할을 한다고 알려져 있습니다.</p></div>
+   <div class="card"><h3><span class="sw" style="background:var(--tmpl)"></span>T · 템플릿</h3><p>"In: What action should the robot take to … ?\nOut:" — 모든 과제에서 똑같은 문구. 끝의 <code>▁</code>(id 29871)도 여기 포함.</p></div>
+   <div class="card"><h3><span class="sw" style="background:var(--lang)"></span>L · 지시문</h3><p>과제마다 달라지는 부분만. <code>bowl</code>→<code>bow</code>+<code>l</code>, <code>ramekin</code>→<code>r</code>+<code>ame</code>+<code>kin</code>처럼 쪼개져 20개가 됩니다.</p></div>
+  </div>
+  <div class="foot"><span>PART 1 · 기초 개념</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 5 attention ============ -->
+<section class="slide" aria-label="attention이란">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 1</span> · 기초 개념</div><h2>Attention = 앞 토큰들에 나눠 주는 "주목도"</h2>
+   <p class="lede">행동 토큰을 만들 때 모델은 앞에 있는 모든 토큰에 주목도를 나눠 줍니다. 한 번 나눌 때 합은 항상 100%입니다. 32층 × 32헤드마다 따로 나눕니다.</p></div>
+  <div class="body c2w">
+   <div class="col">
+    <h3>실측 예: 행동 토큰의 주목도 100%는 어디로 가나</h3>
+    <div class="mbar" role="img" aria-label="BOS 42.1, 템플릿과 행동 40.0, 이미지 11.4, 지시문 6.5 퍼센트">
+     <div class="seg" style="flex:42.1;background:var(--sink)">42.1%</div>
+     <div class="seg t" style="flex:40;background:var(--tmpl)">40.0%</div>
+     <div class="seg" style="flex:11.4;background:var(--vision)">11.4</div>
+     <div class="seg" style="flex:6.5;background:var(--lang)">6.5</div>
+    </div>
+    <div class="legend">
+     <span class="sw" style="background:var(--sink)"></span><span>BOS(sink) 1토큰</span><span class="n">42.1%</span>
+     <span class="sw" style="background:var(--tmpl)"></span><span>템플릿 + 이미 생성한 행동 토큰</span><span class="n">40.0%</span>
+     <span class="sw" style="background:var(--vision)"></span><span>이미지 256토큰</span><span class="n">≈11.4%</span>
+     <span class="sw" style="background:var(--lang)"></span><span>지시문 20토큰</span><span class="n">≈6.5%</span>
+    </div>
+    <p class="cap">task 0, t=0 한 장면, 1,024개(층×헤드) × 7개 행동 행 평균. 이미지·지시문 몫은 비율 평균에서 역산한 근사값.</p>
+   </div>
+   <div class="col">
+    <div class="card"><h3>비유: 형광펜 100칸</h3><p>시험 전날 형광펜 100칸을 교과서에 나눠 칠한다고 생각하면 됩니다. 이 모델은 그중 <b>42칸을 표지(BOS)</b>에 칠하고, 이미지에는 11칸, 지시문에는 6칸만 칠합니다.</p></div>
+    <div class="card orange"><h3>그런데 조심할 점</h3><p>형광펜을 많이 칠했다고 그 내용을 <b>실제로 시험에 썼다</b>는 보장은 없습니다. 반대로 조금 칠했어도 결정적일 수 있습니다.</p><p class="so">→ 그래서 "가려 보고 결과가 바뀌는지"를 직접 확인하는 <b>인과 개입</b>이 필요합니다 (PART 4).</p></div>
+   </div>
+  </div>
+  <div class="foot"><span>PART 1 · 기초 개념</span><span class="pg"></span></div>
+ </div>
+</section>
+<!-- ============ 6 선행연구 ① ============ -->
+<section class="slide" aria-label="선행연구: VLA는 지시문을 잘 안 듣는다">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 2</span> · 선행연구 ① 행동으로 본 증거</div><h2>"VLA는 지시문을 잘 안 듣는다"는 보고가 여럿 있습니다</h2>
+   <p class="lede">지시문을 지우거나 바꿔도 로봇이 똑같이 움직인다면, 모델은 사실상 장면만 보고 행동을 외운 것입니다.</p></div>
+  <div class="body c3">
+   <div class="card"><h3>LIBERO-Plus <span class="id">2510.13626</span></h3>
+    <ul><li>OpenVLA-OFT에 <b>빈 지시문</b>을 줘도 성공률이 거의 안 떨어짐</li><li>지시문의 목표 물체를 바꿔도 <b>원래 물체를 계속 집음</b></li></ul>
+    <p class="so">저자 표현: "visual pattern matcher"</p></div>
+   <div class="card"><h3>Stable Language Guidance <span class="id">2601.04052</span></h3>
+    <ul><li>π0: 정상 <b>94.15%</b> → 빈 지시 <b>25.20%</b> → 80% 마스킹 <b>7.80%</b></li><li>원인을 "modality collapse"로 명명 — 빽빽한 시각 신호가 희박한 언어 신호를 압도</li></ul>
+    <p class="so">이 모델은 오히려 지시문이 없으면 무너짐</p></div>
+   <div class="card"><h3>LIBERO-PRO <span class="id">2510.03827</span></h3>
+    <ul><li>표준 LIBERO에서 90% 이상인 모델이 일반화 설정에서 <b>0.0%</b></li><li>지시문을 망가뜨리거나 의미 없는 토큰을 넣어도 <b>출력이 그대로</b></li></ul>
+    <p class="so">높은 성공률 = 이해가 아니라 암기일 수 있음</p></div>
+  </div>
+  <div class="takeaway">정리 — 대체로 "언어를 덜 쓴다"는 쪽이지만 <b>모델·설정마다 결과가 다릅니다</b> (OpenVLA-OFT는 빈 지시에도 버팀, π0는 무너짐). "어떤 모델이, 어떤 상황에서, 얼마나"는 아직 정리되지 않았습니다.</div>
+  <div class="foot"><span>PART 2 · 선행연구</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 7 선행연구 ② ============ -->
+<section class="slide" aria-label="선행연구: attention 비율로 재기">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 2</span> · 선행연구 ② 내부를 들여다본 연구</div><h2>attention으로 "지시문을 얼마나 보는지" 재는 지표가 이미 있습니다</h2></div>
+  <div class="body c2">
+   <div class="card orange"><h3>Restoring Linguistic Grounding <span class="id">2603.06001</span></h3>
+    <div class="formula">IVAR = <span class="l">지시문으로 간 attention</span> ÷ (<span class="l">지시문</span> + <span class="v">이미지</span>로 간 attention)</div>
+    <ul><li>"linguistic blindness" 진단 — 행동 토큰이 지시문을 거의 안 봄</li><li>원인으로 <b>attention sink</b>를 지목: 행동 query가 특정 토큰에 몰림</li><li>해결책 IGAR: sink 토큰의 attention을 0.6배로 줄이고 나머지에 재분배 → 지시 따르기 개선</li><li>π0, π0.5, OpenVLA-OFT</li></ul>
+    <p class="so">우리의 <b>R_raw는 IVAR와 같은 식</b>입니다 → 재현에서 출발</p></div>
+   <div class="card blue"><h3>VLA-Trace <span class="id">2605.30117</span></h3>
+    <ul><li><b>attention knockout</b>(특정 경로를 막고 결과 비교)으로 시각 경로와 텍스트 경로를 분리</li><li>VLM → 사전학습 VLA → 파인튜닝 VLA로 이어지는 변화를 CKA로 추적</li><li>OpenVLA: 제어 정보가 시각·텍스트 양쪽에 분산 / π0.5: 불안정한 융합</li></ul>
+    <p class="so">공통 결론: "시각 grounding은 좋고, 세밀한 의미 따르기는 약하다"</p>
+    <p class="cap">우리 연구의 개입 방법(knockout)이 이 계열입니다.</p></div>
+  </div>
+  <div class="note">IVAR 논문은 "비율이 낮다 → 높이면 좋아진다"까지 갔습니다. 하지만 <b>그 비율이 실제 인과적 기여를 반영하는지</b>는 따로 검증하지 않았습니다. 다음 장이 그 문제입니다.</div>
+  <div class="foot"><span>PART 2 · 선행연구</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 8 선행연구 ③ ============ -->
+<section class="slide" aria-label="선행연구: attention을 믿어도 되나">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 2</span> · 선행연구 ③ 방법론 논쟁</div><h2>"attention이 크면 중요하다"를 믿어도 될까?</h2>
+   <p class="lede">NLP에서 오래된 논쟁이고, VLA에서도 반복되고 있습니다.</p></div>
+  <div class="body c4">
+   <div class="card"><h3>Jain &amp; Wallace <span class="id">NAACL 2019</span></h3><p><b>"Attention is not Explanation"</b> — attention 가중치를 크게 바꿔도 예측이 그대로인 경우가 많음. 가중치 ≠ 기여.</p></div>
+   <div class="card"><h3>Wiegreffe &amp; Pinter <span class="id">EMNLP 2019</span></h3><p><b>"Attention is not not Explanation"</b> — 반론. 조건에 따라 설명력이 있을 수 있음. 둘 다 인용해야 균형.</p></div>
+   <div class="card"><h3>Kobayashi et al. <span class="id">EMNLP 2020</span></h3><p>attention 가중치만 보지 말고 <b>value 벡터의 크기</b>까지 곱해야 실제로 전달되는 양에 가깝다.</p><p class="so">→ 우리 R_vnorm</p></div>
+   <div class="card orange"><h3>Embodied Interpretability <span class="id">2605.00321</span></h3><p>VLA에서 토큰을 치환하고 행동 분포 변화(KL)를 재는 <b>ISS</b> 제안. <b>"attention은 주로 과제와 무관한 영역에 뜬다"</b>며 attention 계열을 직접 비판.</p></div>
+  </div>
+  <div class="takeaway">분야의 흐름 — <b>관찰(attention 보기) → 개입(가리거나 바꿔 보기)</b>. 그래서 우리는 attention을 결론의 근거로 쓰지 않고, <b>인과 개입 결과와 비교해 채점받는 대상</b>으로 둡니다.</div>
+  <div class="foot"><span>PART 2 · 선행연구</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 9 최근 연구 ============ -->
+<section class="slide dense" aria-label="최근 관련 연구">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 2</span> · 선행연구 ④ 2026년 하반기 조사</div><h2>최근 연구들이 우리 방법에 던지는 질문</h2></div>
+  <div class="body c2">
+   <div class="card"><h3>attention–인과 일치는 샘플마다 다르다 <span class="id">2609.00830 · EMNLP 2026</span></h3>
+    <p>VLM에서 attention 상위 토큰을 지우거나(필요성) 그것만 남겨(충분성) 검증. 샘플이 <b>세 가지 모드</b>(충실·집중 / 충실·분산 / 비집중)로 갈림.</p>
+    <p class="so">우리처럼 전체를 <b>상관계수 하나</b>로 요약하면 서로 다른 모드가 섞일 수 있음</p></div>
+   <div class="card"><h3>통합은 특정 층에서 일어난다 <span class="id">2609.05149 · 2603.15618</span></h3>
+    <p>층별 knockout: VLM에서는 중후반 층(≥22)에서 텍스트→시각 통합. OpenVLA·π0에서는 <b>얕은 층</b>의 팔·물체 토큰 마스킹이 행동을 크게 바꾸고 깊은 층은 영향이 작음.</p>
+    <p class="so">우리는 32층을 <b>한꺼번에</b> 차단 → 어느 층인지 모름</p></div>
+   <div class="card"><h3>sink도 정보를 나른다 <span class="id">2604.03316 · 2503.03321</span></h3>
+    <p>sink는 장면 전체의 사전정보를 담기도 하고, 이미지 안에도 sink 역할을 하는 토큰이 있음. 지워도 성능이 안 떨어지는 "가짜 주목" 토큰이 존재.</p>
+    <p class="so">우리는 BOS를 비율에서 뺐음 → <b>그 근거</b>를 대야 함</p></div>
+   <div class="card"><h3>지시문은 과제 전환 때 다시 본다 <span class="id">2607.03738</span></h3>
+    <p>생성 토큰마다 이미지/지시문/이전 출력에 대한 attention을 추적. 지시문은 <b>과제가 바뀌는 시점</b>에 다시 참조됨. (초록만 확인)</p>
+    <p class="so">"스텝을 언어 중심/시각 중심으로 묶자"는 우리 아이디어의 근거</p></div>
+  </div>
+  <div class="note">이 네 가지는 PART 8의 "보완할 점" 목록에 그대로 반영했습니다. 조사 결과는 프로젝트 문서 <code>vla-모달리티비율-관련연구-2026-09</code>에 있습니다.</div>
+  <div class="foot"><span>PART 2 · 선행연구</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 10 연구 질문 ============ -->
+<section class="slide" aria-label="연구 질문 H1 H2">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 3</span> · 연구 질문</div><h2>답이 있는 질문과 비어 있는 질문</h2></div>
+  <div class="body c2w">
+   <table class="t">
+    <thead><tr><th>질문</th><th>상태</th></tr></thead>
+    <tbody>
+     <tr><td>VLA가 지시문을 무시하는가?</td><td><span class="chip ok">답 있음</span> <span class="sub">LIBERO-Plus, LIBERO-PRO 등</span></td></tr>
+     <tr><td>지시문 attention 비율은 얼마인가?</td><td><span class="chip ok">답 있음</span> <span class="sub">IVAR</span></td></tr>
+     <tr><td>비율을 고쳐 성능을 올릴 수 있나?</td><td><span class="chip ok">답 있음</span> <span class="sub">IGAR</span></td></tr>
+     <tr><td><b>그 비율이 상황에 맞게 조절되는가?</b></td><td><span class="chip warn">비어 있음 → H1</span></td></tr>
+     <tr><td><b>attention 비율이 실제 인과 기여를 예측하는가?</b></td><td><span class="chip warn">비어 있음 → H2</span></td></tr>
+    </tbody>
+   </table>
+   <div class="col">
+    <div class="card orange"><h3>H1 · 비적응성 가설</h3><p>지시문이 <b>꼭 필요한 상황</b>(같은 그릇이 두 개라 지시문으로만 구분 가능)에서도 언어 비율이 별로 달라지지 않는다.</p><p class="cap">사람이라면 헷갈릴수록 지시문을 더 봅니다.</p></div>
+    <div class="card blue"><h3>H2 · 지표 타당성 가설</h3><p>attention 비율(IVAR류)은 knockout으로 잰 <b>실제 인과 기여를 잘 예측하지 못한다</b>.</p><p class="cap">참이면 attention 기반 연구 전체에 대한 경고, 거짓이면 attention 지표를 정당화.</p></div>
+   </div>
+  </div>
+  <div class="takeaway">두 가설 모두 <b>어느 쪽으로 나와도 결과가 됩니다</b>. "적절한 비율이 얼마인가"라는 정답 없는 질문을 피하고, 같은 모델을 조건만 바꿔 자기 자신과 비교하기 때문입니다.</div>
+  <div class="foot"><span>PART 3 · 연구 질문</span><span class="pg"></span></div>
+ </div>
+</section>
+<!-- ============ 11 관찰 지표 ============ -->
+<section class="slide dense" aria-label="관찰 지표 세 가지">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 4</span> · 측정 방법 ① 관찰</div><h2>attention 비율은 세 가지로 잽니다</h2>
+   <p class="lede">세 지표 모두 "이미지+지시문으로 간 attention 중 지시문의 몫"이며 0~1 사이 값입니다. BOS·템플릿·행동 토큰으로 간 attention은 분모에서 뺍니다.</p></div>
+  <div class="body c3">
+   <div class="card"><h3>R_raw · 원시 비율</h3>
+    <div class="formula"><span class="l">L 질량</span> ÷ (<span class="l">L</span> + <span class="v">V</span> 질량)</div>
+    <p>IVAR와 같은 식. 선행연구 재현용입니다.</p>
+    <p><b>함정</b>: 토큰 수가 256 : 20이라, 주목도를 <b>똑같이</b> 나눠 줘도 20/276 = <b>0.072</b>가 나옵니다. 이 값을 <b>uniform baseline</b>이라 부르고 항상 같이 보고합니다.</p>
+    <p class="so">예: 0.362 = baseline의 <b>5.0배</b></p></div>
+   <div class="card"><h3>R_norm · 토큰당 비율</h3>
+    <div class="formula">(<span class="l">L</span>/20) ÷ (<span class="l">L</span>/20 + <span class="v">V</span>/256)</div>
+    <p>토큰 <b>한 개</b>가 평균적으로 받는 주목도를 비교합니다. 개수 차이를 없앤 값이라 <b>0.5 = 동등</b>.</p>
+    <p><b>함정</b>: 이미지 토큰은 대부분 배경이라 "평균 이미지 토큰"은 원래 낮습니다. 높다고 언어를 "더 쓴다"는 뜻은 아닙니다.</p>
+    <p class="so">예: 0.784 → 지시문 토큰 1개 ≈ 이미지 토큰 1개의 3.6배</p></div>
+   <div class="card"><h3>R_vnorm · value 가중 비율</h3>
+    <div class="formula">Σ attention × ‖value‖ 로 R_raw를 다시 계산</div>
+    <p>주목도가 커도 그 토큰이 실어 보내는 벡터(value)가 작으면 실제로 전달되는 양은 적습니다 (Kobayashi 2020의 단순화판).</p>
+    <p class="so">예: 0.345 — R_raw와 거의 같음 → value 크기가 그림을 바꾸지 않음</p></div>
+  </div>
+  <div class="note">"예" 수치는 task 0, t=0 한 장면 (수정 후 코드). 지표는 32층 × 32헤드 × 7행 각각에서 비율을 구한 뒤 평균합니다. 자세한 정의는 <code>docs/06_metrics.md</code>.</div>
+  <div class="foot"><span>PART 4 · 측정 방법</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 12 개입 ============ -->
+<section class="slide dense" aria-label="인과 개입: knockout과 KL">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 4</span> · 측정 방법 ② 인과 개입</div><h2>가려 보고, 행동이 얼마나 바뀌는지 잽니다</h2>
+   <p class="lede">attention knockout: 행동 토큰이 특정 토큰들을 <b>아예 못 보게</b> 막은 뒤, 행동 분포가 원래와 얼마나 달라졌는지를 KL로 잽니다.</p></div>
+  <div class="body c2w">
+   <div class="col">
+    <ol class="steps">
+     <li><div><b>원래대로</b> 한 번 계산 → 7개 행동 각각의 256칸 확률분포 <i>p</i></div></li>
+     <li><div><b>가리고</b> 다시 계산 → 분포 <i>q</i><small>softmax 이전 점수에 −∞를 넣어 해당 칸의 주목도를 0으로 만들고, 나머지끼리 다시 100%를 나눔. 32층 전부에 적용</small></div></li>
+     <li><div><b>KL(p ‖ q)</b>: 두 분포가 얼마나 다른가 (단위 nats, 0 = 변화 없음)<small>감각: 원래 확실히 고르던 칸을 가린 뒤에 1/256보다 낮게 보면 KL이 ln 256 ≈ 5.5를 넘음</small></div></li>
+     <li><div>7개 행동의 KL을 평균해 한 스텝의 값으로 기록</div></li>
+    </ol>
+    <div class="formula">causal_ratio = KL<sub>지시문</sub> ÷ (KL<sub>지시문</sub> + KL<sub>이미지</sub>)</div>
+    <p class="cap">R_raw와 같은 축(0~1, 지시문의 몫)에 놓으려고 만든 값. H2는 "R과 causal_ratio가 같이 움직이는가"입니다.</p>
+   </div>
+   <div class="col">
+    <h3>세 가지를 가립니다</h3>
+    <div class="card orange"><h3>① 지시문 knockout</h3><p>지시문 토큰 20개 전부</p></div>
+    <div class="card blue"><h3>② 이미지 knockout</h3><p>이미지 토큰 256개 전부</p></div>
+    <div class="card"><h3>③ 대조군 knockout</h3><p>이미지 토큰 중 <b>무작위 20개</b> (지시문과 같은 개수)</p><p class="so">"아무 토큰 20개만 가려도 이만큼 바뀐다"면 지시문이 특별한 게 아닙니다. 대조군보다 확실히 커야 의미가 있습니다.</p></div>
+   </div>
+  </div>
+  <div class="foot"><span>PART 4 · 측정 방법</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 13 2-pass + Q ============ -->
+<section class="slide dense" aria-label="한 스텝 분석 절차">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 4</span> · 측정 방법 ③ 한 스텝을 분석하는 절차</div><h2>행동을 먼저 만들고, 그 행동을 고정한 채 다시 들여다봅니다</h2></div>
+  <div class="body c2">
+   <div class="col">
+    <ol class="steps">
+     <li><div><b>생성</b> — greedy(가장 확률 높은 칸만 선택)로 행동 토큰 7개를 만듭니다.<small>capture.generate_action_tokens</small></div></li>
+     <li><div><b>teacher-forced 재계산</b> — [프롬프트 + 그 7개]를 한 번에 넣어 모든 층·헤드의 attention, value 크기, 확률분포를 한 번에 얻습니다.<small>생성 중에 캡처하면 단계마다 모양이 달라 다루기 어렵기 때문</small></div></li>
+     <li><div><b>knockout 3회</b> — 같은 7개 행동 토큰을 강제로 넣은 채 가리기만 바꿔 다시 계산합니다.<small>앞 행동이 달라져 생기는 연쇄 효과를 빼고 "그 칸 하나의 분포 변화"만 봄</small></div></li>
+     <li><div><b>한 행 기록</b> — R 3종, KL 3종, causal_ratio 등 약 30개 값을 CSV 한 줄로.<small>pipeline.analyze_step</small></div></li>
+    </ol>
+   </div>
+   <div class="col">
+    <h3>어느 위치(행)를 보는가 — 10/06 수정 사항</h3>
+    <div class="pos">
+     <div class="k">289</div><div class="k">290</div><div class="k">291</div><div class="k">292</div><div class="k">293</div><div class="k">294</div><div class="k">295</div><div class="k">296</div><div class="k">297</div>
+     <div class="p">:</div><div class="p Q">▁</div><div class="p A Q">a0</div><div class="p A Q">a1</div><div class="p A Q">a2</div><div class="p A Q">a3</div><div class="p A Q">a4</div><div class="p A Q">a5</div><div class="p A">a6</div>
+     <div></div><div class="ar">↗a0</div><div class="ar">↗a1</div><div class="ar">↗a2</div><div class="ar">↗a3</div><div class="ar">↗a4</div><div class="ar">↗a5</div><div class="ar">↗a6</div><div></div>
+    </div>
+    <p>언어 모델에서 위치 <i>p</i>의 출력은 <b>다음 칸(p+1)</b>을 예측합니다. 그래서 행동 a0을 정하는 것은 a0 자리(291)가 아니라 <b>한 칸 앞(290)</b>입니다.</p>
+    <p>파란 테두리 <b>Q = [290..296]</b>이 "행동을 예측하는 자리"이고, attention 측정·knockout·KL이 모두 이 행을 씁니다.</p>
+    <p class="cap">수정 전에는 attention·knockout은 291..297, KL은 290..296을 봐서 서로 어긋나 있었습니다 (PART 7).</p>
+   </div>
+  </div>
+  <div class="foot"><span>PART 4 · 측정 방법</span><span class="pg"></span></div>
+ </div>
+</section>
+<!-- ============ 14 단계 지도 ============ -->
+<section class="slide dense" aria-label="실험 단계와 스크립트 지도">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 5</span> · 코드 구조 ① 전체 지도</div><h2>실험은 Stage 0~6, 단계마다 담당 파일이 정해져 있습니다</h2>
+   <p class="lede">앞 단계가 통과해야 뒤 단계 숫자를 믿을 수 있게 짰습니다. 노트북(Windows)은 코드 편집과 단위 테스트, GPU 서버(Linux)는 나머지 전부를 맡습니다.</p></div>
+  <table class="t">
+   <thead><tr><th>Stage</th><th>하는 일</th><th>파일</th><th>통과 기준</th><th>상태</th></tr></thead>
+   <tbody>
+    <tr><td class="f">0</td><td>GPU 없이 로직 검증</td><td class="f">tests/test_core.py</td><td>단위 테스트 65개</td><td><span class="chip ok">통과</span></td></tr>
+    <tr><td class="f">1</td><td>서버 환경 구축</td><td class="f">setup/01 → 04</td><td><code>04_verify</code> 13/13</td><td><span class="chip ok">통과</span></td></tr>
+    <tr><td class="f">2</td><td>구조 검증 (토큰 위치·attention 모양)</td><td class="f">scripts/01_smoke_forward</td><td>7단계 모두 정상, L 태깅 육안 확인</td><td><span class="chip ok">통과</span></td></tr>
+    <tr><td class="f">2.5</td><td>모델이 실제로 본 이미지 확인</td><td class="f">scripts/07_dump_model_input</td><td>렌더 이미지와 구도 일치</td><td><span class="chip ok">통과</span></td></tr>
+    <tr><td class="f">2.9</td><td>정책이 과제를 성공하는지</td><td class="f">scripts/08_policy_sanity</td><td>성공 1회 이상</td><td><span class="chip ok">통과</span></td></tr>
+    <tr><td class="f">3</td><td>롤아웃하며 비율 + KL 수집</td><td class="f">scripts/02_run_analysis</td><td>성공률이 논문 수준</td><td><span class="chip warn">재수집 필요</span></td></tr>
+    <tr><td class="f">4</td><td>H2 검정 (상관)</td><td class="f">scripts/03_correlation</td><td>—</td><td><span class="chip idle">대기</span></td></tr>
+    <tr><td class="f">5</td><td>H1 검정 (지시문 바꾸기)</td><td class="f">scripts/04_counterfactual</td><td>—</td><td><span class="chip idle">대기</span></td></tr>
+    <tr><td class="f">6</td><td>그림</td><td class="f">scripts/05_plots</td><td>—</td><td><span class="chip idle">대기</span></td></tr>
+   </tbody>
+  </table>
+  <div class="note">공통 부품은 <code>vlamod/</code> 패키지에, 설정은 <code>configs/default.yaml</code>에, 지표 정의는 <code>docs/06_metrics.md</code>에 있습니다.</div>
+  <div class="foot"><span>PART 5 · 코드 구조</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 15 setup ============ -->
+<section class="slide dense" aria-label="setup 폴더">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 5</span> · 코드 구조 ② setup/</div><h2>setup/ — 설치 4개 + 진단 4개</h2>
+   <p class="lede">01~04는 처음 한 번 순서대로, 05~08은 <code>04_verify</code>가 실패했을 때 원인을 좁히는 용도입니다.</p></div>
+  <div class="body c2">
+   <div class="col">
+    <h3>설치 (순서대로 1회)</h3>
+    <table class="t">
+     <tbody>
+      <tr><td class="f">01_env.sh</td><td>conda 환경 <code>vlamod</code>(Python 3.10) 생성 → GPU 드라이버를 보고 torch <b>cu118/cu121</b> 자동 선택 → OpenVLA 설치. pip 버전 제약(<code>constraints.txt</code>)을 conda 활성화 때 자동 적용되게 등록</td></tr>
+      <tr><td class="f">02_libero.sh</td><td>LIBERO 시뮬레이터 설치. 설치 중 올라가 버리는 numpy/opencv 버전을 되돌리고 검증</td></tr>
+      <tr><td class="f">03_download_ckpt.py</td><td>체크포인트 <code>openvla-7b-finetuned-libero-spatial</code> 다운로드 (약 15GB)</td></tr>
+      <tr><td class="f">04_verify.py</td><td>설치 없이 <b>상태만 13개 항목</b> 점검. 실제로 시뮬레이터 화면을 한 장 렌더링해 PNG로 저장까지 확인. <code>--gpu</code>, <code>--gpus</code>, <code>--egl-device</code></td></tr>
+     </tbody>
+    </table>
+   </div>
+   <div class="col">
+    <h3>진단 (04가 실패했을 때)</h3>
+    <table class="t">
+     <tbody>
+      <tr><td class="f">05_diag_render.py</td><td>렌더링을 10단계로 쪼개 어디서 죽는지 특정. GPU 렌더인지 소프트웨어 렌더인지, 속도도 측정</td></tr>
+      <tr><td class="f">06_gpu_map.py</td><td>nvidia-smi / torch / EGL 세 가지 GPU 번호 체계를 나란히 대조</td></tr>
+      <tr><td class="f">07_egl_probe.py</td><td>EGL(화면 없는 렌더링) 장치 수·제조사, NVIDIA GL 라이브러리 유무, 관리자 권한 없이 우회 가능한지</td></tr>
+      <tr><td class="f">08_diag_robosuite.py</td><td>robosuite ↔ mujoco ↔ LIBERO 버전 궁합 확인. "메시지 없는 AssertionError" 전용</td></tr>
+     </tbody>
+    </table>
+    <p class="cap">05~08은 실제로 겪은 문제마다 하나씩 만든 도구입니다 (PART 7 참고).</p>
+   </div>
+  </div>
+  <div class="foot"><span>PART 5 · 코드 구조</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 16 01_smoke ============ -->
+<section class="slide dense" aria-label="scripts 01_smoke_forward">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 5</span> · 코드 구조 ③ scripts/01_smoke_forward.py</div><h2>01 — 관문: "이게 틀리면 뒤의 숫자가 전부 무의미"</h2>
+   <p class="lede">장면 하나로 파이프라인 전체를 한 번 돌리면서, 각 단계의 중간값을 화면에 찍어 사람이 눈으로 확인하게 합니다.</p></div>
+  <div class="body c2w">
+   <ol class="steps tagged">
+    <li data-n="1"><div><b>모델 로딩</b> — attention을 꺼낼 수 있는 eager 모드 강제. 층 32 · 헤드 32 확인</div></li>
+    <li data-n="1b"><div><b>LIBERO 관측</b> (<code>--libero</code>) — 실제 시뮬레이터 장면 2장. 장면 PNG 저장 후 환경 종료</div></li>
+    <li data-n="2"><div><b>프롬프트</b> — 템플릿에 지시문을 넣고, 지시문이 몇 번째 글자부터인지 기록</div></li>
+    <li data-n="3"><div><b>이미지 토큰 위치 실측</b> — 이미지만 다른 두 입력을 넣어 임베딩이 달라지는 구간을 찾음 → [1, 257)</div></li>
+    <li data-n="4"><div><b>토큰 구간 분해</b> — 모든 텍스트 토큰에 S/T/L 태그를 붙여 출력. 맨 끝에 A, Q 구간 표시. <b>눈으로 검증</b></div></li>
+    <li data-n="5"><div><b>행동 토큰 생성</b> — 7개 id가 행동 칸 범위 [31744, 31999] 안인지</div></li>
+    <li data-n="6"><div><b>teacher-forced 캡처</b> — attention 모양 (32, 32, 7, 298), 각 행의 합 ≈ 1</div></li>
+    <li data-n="7"><div><b>비율 지표</b> — uniform baseline, R 3종, sink 질량</div></li>
+   </ol>
+   <div class="col">
+    <div class="card"><h3>실행</h3><div class="formula" style="font-size:.82em">python scripts/01_smoke_forward.py \<br>&nbsp;&nbsp;--gpu 0 --libero --suite spatial --task-id 0</div></div>
+    <div class="card"><h3>출력 파일</h3><p><code>outputs/smoke_capture.pt</code> — 구간·비율 저장<br><code>outputs/smoke_libero_view.png</code> — 모델에 넣기 전 장면</p></div>
+    <div class="card orange"><h3>실제로 잡아낸 것</h3><p>지시문 첫 단어 <code>pick</code>이 L에서 빠지던 버그, 29871 토큰 누락, 행 위치 어긋남 — 모두 이 출력에서 확인했습니다.</p></div>
+   </div>
+  </div>
+  <div class="foot"><span>PART 5 · 코드 구조</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 17 02_run ============ -->
+<section class="slide dense" aria-label="scripts 02_run_analysis">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 5</span> · 코드 구조 ④ scripts/02_run_analysis.py</div><h2>02 — 본 데이터 수집: 로봇을 실제로 움직이며 매 5스텝마다 분석</h2></div>
+  <div class="body c2w">
+   <div class="col">
+    <div class="formula" style="font-size:.84em;line-height:1.75">
+     for task in 0..4:<br>
+     &nbsp;&nbsp;for episode in 0..2:<br>
+     &nbsp;&nbsp;&nbsp;&nbsp;초기 상태로 리셋, 10스텝 대기 (물체가 자리 잡게)<br>
+     &nbsp;&nbsp;&nbsp;&nbsp;for t in 0..219:<br>
+     &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if t % 5 == 0: <b>analyze_step</b> → CSV 한 행<br>
+     &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<b>policy_action</b> → 행동 7개 → env.step<br>
+     &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;과제 완료면 종료<br>
+     &nbsp;&nbsp;&nbsp;&nbsp;check_success() → 그 에피소드 모든 행에 성공 여부 기록
+    </div>
+    <div class="note"><b>분석</b>(analyze_step)과 <b>운전</b>(policy_action)은 별개입니다. 분석은 장면을 들여다보기만 하고 로봇을 움직이지 않습니다. 운전은 OpenVLA 공식 <code>predict_action</code> + 그리퍼 규약 변환을 씁니다.</div>
+   </div>
+   <div class="col">
+    <div class="card"><h3>주요 옵션</h3><p><code>--tasks 0 1 2 3 4</code> <code>--episodes 3</code><br><code>--max-steps 220</code> 에피소드 최대 길이<br><code>--stride 5</code> 몇 스텝마다 분석할지<br><code>--gpu N</code> 사용할 GPU (nvidia-smi 번호)</p></div>
+    <div class="card"><h3>출력</h3><p><code>outputs/analysis_spatial.csv</code><br>한 행 = 한 분석 스텝. R 3종, KL 3종, causal_ratio, 대조군 차이, task/episode/t, 성공 여부 등 약 30열</p><p><code>outputs/perlayer_spatial.npz</code> — 층별 비율 32개</p></div>
+    <div class="card"><h3>최근 실행</h3><p>5 task × 3 에피소드 → <b>364행</b>, 성공 <b>13/15</b>. 마지막에 요약 통계와 성공률을 출력합니다.</p></div>
+   </div>
+  </div>
+  <div class="foot"><span>PART 5 · 코드 구조</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 18 03 04 05 ============ -->
+<section class="slide dense" aria-label="scripts 03 04 05">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 5</span> · 코드 구조 ⑤ 분석·검정·그림</div><h2>03 · 04 · 05 — 모은 데이터로 가설을 검정하고 그림을 그립니다</h2></div>
+  <div class="body c3">
+   <div class="card blue"><h3>03_correlation.py <span class="id">H2</span></h3>
+    <p>02의 CSV 하나만 있으면 GPU 없이 돕니다.</p>
+    <ul><li>R_raw / R_norm / R_vnorm 각각과 causal_ratio의 <b>Spearman·Pearson 상관</b></li><li>언어 knockout이 대조군보다 큰지 검정</li><li>해석 기준: |ρ| &lt; 0.3이면 attention이 인과를 거의 예측 못 함, &gt; 0.6이면 쓸 만한 대리 지표</li></ul>
+    <p class="so">출력: <code>outputs/correlation.csv</code></p></div>
+   <div class="card orange"><h3>04_counterfactual.py <span class="id">H1</span></h3>
+    <p>같은 장면·같은 순간에 <b>지시문만</b> 네 가지로 바꿉니다.</p>
+    <ul><li><b>valid</b> 원래 지시</li><li><b>swapped</b> 다른 task의 지시 (모순)</li><li><b>paraphrase</b> 동의어 치환 (의미 같음)</li><li><b>empty</b> 빈 지시 (분포 밖이라 해석 주의)</li></ul>
+    <p>각 조건의 R과 원래 대비 KL, argmax가 같은 DoF 수를 기록. 기본은 모든 조건이 valid의 행동 토큰을 공유(<code>--prefix-mode shared</code>).</p>
+    <p class="so">출력: <code>outputs/counterfactual_spatial.csv</code></p></div>
+   <div class="card"><h3>05_plots.py <span class="id">그림</span></h3>
+    <p>있는 결과 파일만 골라 그림 4장을 만듭니다.</p>
+    <ul><li>층별 언어 비율 (baseline 선 포함)</li><li>H2 산점도: R_norm vs causal_ratio, ρ 표시</li><li>지시 조건별 R_norm (H1)</li><li>지시 조건별 KL (H1)</li></ul>
+    <p class="so">출력: <code>outputs/fig_*.png</code></p></div>
+  </div>
+  <div class="note">04를 돌릴 때는 <code>--suite spatial</code>을 꼭 지정해야 05가 같은 이름의 파일을 찾습니다 (기본값이 object).</div>
+  <div class="foot"><span>PART 5 · 코드 구조</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 19 07 08 ============ -->
+<section class="slide dense" aria-label="scripts 07 08">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 5</span> · 코드 구조 ⑥ 검증용 도구</div><h2>07 · 08 — "모델이 본 것"과 "정책이 제대로 도는지"를 확인</h2></div>
+  <div class="body c2">
+   <div class="card"><h3>07_dump_model_input.py</h3>
+    <p>시뮬레이터 화면(256×256)은 모델이 실제로 받는 입력이 아닙니다. processor가 리사이즈·정규화를 거쳐 만든 <code>pixel_values</code>가 진짜 입력입니다. 이 스크립트는 그걸 다시 사람이 볼 수 있는 PNG로 되돌립니다.</p>
+    <ul><li>채널 6개 = <b>DINOv2용 + SigLIP용</b> 두 전처리가 겹쳐 있음을 확인</li><li>둘 다 224×224, 비율 왜곡 없음</li><li>렌더 이미지와 구도 상관 <b>0.9985</b> (상하·좌우 반전이면 0.1~0.2) → processor는 추가로 뒤집지 않음</li></ul>
+    <p class="so">결론: "우리가 의도한 이미지 = 모델이 받은 이미지"</p></div>
+   <div class="card orange"><h3>08_policy_sanity.py</h3>
+    <p>성공률이 0%였을 때 원인을 경험적으로 고르려고 만들었습니다. 후보를 나란히 돌려 비교합니다.</p>
+    <ul><li><code>norm_stats</code> 키 목록 출력 → <code>unnorm_key</code>가 맞는지</li><li>이미지 전처리 변형(<code>current</code> 180° 회전, <code>rot180_crop</code> + 중앙 crop 등) × 그리퍼 변환 전/후</li><li>성공 여부 외에도 <b>닫기 명령 수, 팔 끝 이동 거리, 행동 크기, 원시 그리퍼 값 분포</b>를 찍어 성공 0%여도 원인을 좁힘</li></ul>
+    <p class="so">이 도구로 "그리퍼 규약"이 원인임을 확정했습니다 (PART 7)</p></div>
+  </div>
+  <div class="foot"><span>PART 5 · 코드 구조</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 20 vlamod ============ -->
+<section class="slide dense" aria-label="vlamod 패키지">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 5</span> · 코드 구조 ⑦ vlamod/ 공통 부품</div><h2>vlamod/ — 스크립트들이 같이 쓰는 부품</h2></div>
+  <div class="body c2">
+   <table class="t">
+    <tbody>
+     <tr><td class="f">token_index.py</td><td>프롬프트 생성, 이미지 토큰 위치 실측, S/V/L/T/A/Q 구간 나누기, 29871 덧붙이기(<code>prepare_inputs</code>), 육안 검증 출력</td></tr>
+     <tr><td class="f">capture.py</td><td>2-pass 캡처: greedy 생성 → teacher-forced 재계산. Q 행 위치 자동 검증(<code>check_query_rows</code>)</td></tr>
+     <tr><td class="f">intervene.py</td><td>softmax 이전 attention knockout (지시문 / 이미지 / 무작위 대조군). 층 지정 가능</td></tr>
+     <tr><td class="f">metrics.py</td><td>R_raw / R_norm / R_vnorm, 질량 분해, action KL, causal_ratio</td></tr>
+     <tr><td class="f">pipeline.py</td><td><code>analyze_step</code>: 한 스텝 = 관찰 + 개입 → CSV 한 행. <code>policy_action</code>: 운전용 행동 + 그리퍼 변환</td></tr>
+    </tbody>
+   </table>
+   <div class="col">
+    <table class="t">
+     <tbody>
+      <tr><td class="f">device.py</td><td>환경변수(GPU 번호 순서, EGL), <code>--gpu</code> 처리, 렌더 장치 자동 선택, GPU 메모리 보고</td></tr>
+      <tr><td class="f">model_loader.py</td><td>OpenVLA 로딩(eager 강제, 여러 GPU 분할), 행동 칸 id 계산</td></tr>
+      <tr><td class="f">env_libero.py</td><td>LIBERO 환경 생성·리셋·관측 → 이미지(180° 회전)</td></tr>
+      <tr><td class="f">preprocess.py</td><td>이미지 전처리 변형 모음 (crop 등, 08에서 사용)</td></tr>
+      <tr><td class="f">viz.py</td><td>그림 스타일과 4종 그림 함수</td></tr>
+     </tbody>
+    </table>
+    <div class="card"><h3>tests/test_core.py — 65개</h3><p>GPU·모델 없이 로직만 검사: 균등 attention이면 R_raw = baseline인지, 구간 분리, knockout 마스크, GPU 인자 처리, Q 행 정렬, 29871 처리 등.</p></div>
+   </div>
+  </div>
+  <div class="foot"><span>PART 5 · 코드 구조</span><span class="pg"></span></div>
+ </div>
+</section>
+<!-- ============ 21 결과: 관찰 ============ -->
+<section class="slide dense" aria-label="결과: 관찰">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 6</span> · 결과 ① 관찰</div><h2>개수에 비하면 지시문을 훨씬 많이 본다 — 하지만 전체로는 소수</h2></div>
+  <div class="body c2w">
+   <div class="col">
+    <div class="stats wide">
+     <div class="stat"><div class="stat-v">6.4<small>배</small></div><div class="stat-l"><b>R_raw ÷ uniform baseline</b> (Stage 3, 364행 평균 0.417 ÷ 0.066). 토큰 개수만큼 나눠 줬을 때보다 지시문을 6배 넘게 봅니다.</div></div>
+     <div class="stat"><div class="stat-v">0.85</div><div class="stat-l"><b>R_norm</b> 평균. 0.5가 동등이므로 지시문 토큰 1개가 이미지 토큰 1개보다 훨씬 많이 주목받습니다.</div></div>
+     <div class="stat"><div class="stat-v">≈0.40</div><div class="stat-l"><b>R_vnorm</b> 평균. value 크기로 가중해도 R_raw와 거의 같습니다.</div></div>
+     <div class="stat"><div class="stat-v">42<small>%</small></div><div class="stat-l"><b>BOS 한 토큰</b>이 가져가는 주목도. 이미지와 지시문을 다 합쳐도 약 18%입니다.</div></div>
+    </div>
+   </div>
+   <div class="col">
+    <div class="card"><h3>R_raw 0.4를 "지시문 40%"로 읽으면 안 됩니다</h3>
+     <p>분모가 이미지+지시문뿐이라, 전체 주목도로 환산하면 <b>지시문 ≈ 6.5%</b>, 이미지 ≈ 11.4%입니다. 나머지 80% 넘게는 BOS와 템플릿·행동 토큰으로 갑니다.</p></div>
+    <div class="card"><h3>sink 질량은 입력과 무관해 보임</h3>
+     <p>난수 이미지 실행과 LIBERO 실행에서 BOS 질량이 0.4334 / 0.4337로 거의 같았습니다. 이미지·지시문·길이가 다 달라도 그대로 → 구조적 성질이라는 정황 (각 1회씩이라 근거로는 약함).</p></div>
+    <p class="cap">Stage 3 값은 10/06 수정 <b>전</b> 코드 기준. "42%·6.5%·11.4%"는 수정 후 단일 장면(task 0, t=0).</p>
+   </div>
+  </div>
+  <div class="foot"><span>PART 6 · 결과</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 22 결과: 개입 ============ -->
+<section class="slide dense" aria-label="결과: 개입">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 6</span> · 결과 ② 인과 개입</div><h2>지시문 20개를 가린 효과 ≈ 이미지 256개를 가린 효과</h2>
+   <p class="lede">Stage 3: LIBERO-Spatial 5 task × 3 에피소드, 5스텝마다 분석 → 364행. 성공 <b>13/15 (86.7%)</b>.</p></div>
+  <div class="body c2w">
+   <div class="col">
+    <h3>평균 KL (클수록 행동이 많이 바뀜, nats)</h3>
+    <div class="kl">
+     <div class="kl-row"><div class="kl-name">지시문 knockout<small>20토큰</small></div><div class="kl-track"><div class="kl-fill" style="width:74%;background:var(--lang)"></div><div class="kl-val" style="left:74%">8.38</div></div></div>
+     <div class="kl-row"><div class="kl-name">이미지 knockout<small>256토큰</small></div><div class="kl-track"><div class="kl-fill" style="width:70.3%;background:var(--vision)"></div><div class="kl-val" style="left:70.3%">7.95</div></div></div>
+     <div class="kl-row"><div class="kl-name">대조군 knockout<small>무작위 이미지 20토큰</small></div><div class="kl-track"><div class="kl-fill" style="width:2%;background:var(--sink)"></div><div class="kl-val" style="left:2%">0.22</div></div></div>
+    </div>
+    <div class="takeaway" style="margin-top:.6em">지시문을 가리면 <b>364행 전부</b>에서 대조군보다 크게 바뀌었습니다 (가장 작은 경우도 4.4배). 같은 개수의 아무 토큰이 아니라 <b>지시문이라서</b> 생기는 효과입니다.</div>
+   </div>
+   <div class="col">
+    <div class="stats wide">
+     <div class="stat"><div class="stat-v">0.51</div><div class="stat-l"><b>causal_ratio</b> 평균. 인과적으로는 지시문과 이미지가 거의 반반입니다.</div></div>
+     <div class="stat"><div class="stat-v" style="font-size:1.45em">0.46–0.57</div><div class="stat-l">15개 에피소드 각각의 평균. 어느 task, 어느 에피소드에서도 반반 근처였습니다.</div></div>
+    </div>
+    <div class="card orange"><h3>해석할 때 조심할 점</h3><p>knockout은 학습 때 본 적 없는 상태를 만듭니다. "지시문 경로를 끊으면 망가진다"가 곧 "지시문의 <b>의미</b>를 쓴다"는 아닙니다 (LIBERO-PRO의 반론). 04의 swapped/paraphrase 결과와 함께 봐야 합니다.</p></div>
+    <p class="cap">수정 전 코드 기준: 첫 번째 행동 값의 KL이 항상 0이라 KL 절대값은 실제보다 작게 잡혔을 가능성이 큽니다.</p>
+   </div>
+  </div>
+  <div class="foot"><span>PART 6 · 결과</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 23 결과: H2 ============ -->
+<section class="slide dense" aria-label="결과: H2 첫 신호">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 6</span> · 결과 ③ H2 첫 신호</div><h2>attention 비율은 인과 기여를 약하게만 따라간다</h2></div>
+  <div class="body c2">
+   <div class="col">
+    <table class="t">
+     <thead><tr><th>비교 (364행, Spearman)</th><th class="n">ρ</th><th>읽는 법</th></tr></thead>
+     <tbody>
+      <tr><td>R_raw ↔ causal_ratio</td><td class="n">0.25</td><td>약한 양의 상관</td></tr>
+      <tr><td>R_norm ↔ causal_ratio</td><td class="n">0.23</td><td>〃</td></tr>
+      <tr><td>R_vnorm ↔ causal_ratio</td><td class="n">0.25</td><td>〃</td></tr>
+      <tr><td>R_raw ↔ 시간 t</td><td class="n">0.42</td><td>에피소드 후반일수록 지시문 attention ↑</td></tr>
+      <tr><td>KL_지시문 ↔ 시간 t</td><td class="n">0.28</td><td>후반일수록 지시문 가림 효과 ↑</td></tr>
+     </tbody>
+    </table>
+    <p>세 지표 모두 |ρ| &lt; 0.3 → 스크립트 기준으로는 <b>H2 쪽</b>(attention이 인과를 잘 예측하지 못함)입니다.</p>
+   </div>
+   <div class="col">
+    <div class="card"><h3>변동은 어디서 오나</h3><p>R_raw 분산 중 task 차이가 <b>14%</b>, task×에피소드가 <b>19%</b>만 설명합니다. 나머지는 에피소드 안에서 <b>시간에 따라</b> 변합니다. causal_ratio는 task 차이가 4%뿐입니다.</p></div>
+    <div class="card orange"><h3>아직 주장할 수 없는 이유</h3>
+     <ul><li>한 에피소드 안의 행들은 서로 비슷해서, 364행을 독립으로 본 p 값은 실제보다 작게 나옵니다. 독립 단위는 사실상 <b>에피소드 15개</b></li><li>10/06 수정 전 코드의 값</li><li>대조군 배치가 한 가지(시드 1개)뿐</li></ul>
+     <p class="so">재수집 후 에피소드 단위 bootstrap으로 다시 계산합니다</p></div>
+   </div>
+  </div>
+  <div class="foot"><span>PART 6 · 결과</span><span class="pg"></span></div>
+ </div>
+</section>
+<!-- ============ 24 환경 문제 ============ -->
+<section class="slide dense" aria-label="시행착오: 환경 구축">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 7</span> · 시행착오 ① 환경 구축</div><h2>모델을 돌리기까지 막혔던 일곱 가지</h2></div>
+  <table class="t">
+   <thead><tr><th>증상</th><th>진짜 원인</th><th>해결</th></tr></thead>
+   <tbody>
+    <tr><td>GPU 0번을 골랐는데 다른 카드가 잡힘</td><td>CUDA 기본 번호 순서(빠른 카드 우선)가 nvidia-smi 순서(PCI 슬롯)와 다름</td><td><code>CUDA_DEVICE_ORDER=PCI_BUS_ID</code>를 config 기본값으로</td></tr>
+    <tr><td><code>MUJOCO_EGL_DEVICE_ID must be 0..0, got 8</code></td><td>렌더링 장치(EGL)는 1개뿐인데 GPU 번호를 그대로 넘김. NVIDIA EGL 라이브러리가 없어 Mesa(소프트웨어)로 동작</td><td>GPU 번호와 렌더 장치 번호를 분리, 자동 판정 (결과에는 영향 없음)</td></tr>
+    <tr><td>렌더링 중 메시지 없는 <code>AssertionError</code></td><td>mujoco 3.12가 robosuite 1.4.1과 비호환 (관절 주소 비교 방식 변경)</td><td><code>mujoco==2.3.0</code> 고정</td></tr>
+    <tr><td><code>Numpy is not available</code></td><td>설치 과정에서 numpy 2.x로 올라감 ↔ torch 2.2.0</td><td><code>numpy&lt;2</code> 등 제약 파일을 conda 활성화 시 자동 적용</td></tr>
+    <tr><td>driver too old</td><td>드라이버 520 ↔ torch cu121</td><td>드라이버를 보고 cu118 자동 선택</td></tr>
+    <tr><td>지시문 첫 단어 <code>pick</code>이 L에서 빠짐</td><td>토크나이저가 단어 앞 공백까지 글자 구간에 포함</td><td>공백을 벗긴 뒤 "겹치면 L"로 판정 + 개수 자기검증</td></tr>
+    <tr><td><code>tensor a (291) must match … (290)</code></td><td>OpenVLA <code>predict_action</code>이 입력 끝에 토큰(29871)을 덧붙이는데 attention_mask는 그대로</td><td>mask를 같이 늘리도록 처리</td></tr>
+   </tbody>
+  </table>
+  <div class="note">진단용 setup 05~08은 이 표의 위쪽 세 줄을 잡으면서 만들어졌습니다. 전체 기록은 <code>docs/02_runbook.md</code>의 트러블슈팅 표.</div>
+  <div class="foot"><span>PART 7 · 시행착오</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 25 그리퍼 ============ -->
+<section class="slide dense" aria-label="시행착오: 성공률 0%와 그리퍼 규약">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 7</span> · 시행착오 ② 성공률 0%</div><h2>팔은 움직이는데 못 집는다 — 원인은 그리퍼 부호였습니다</h2></div>
+  <div class="body c2">
+   <div class="col">
+    <table class="t">
+     <thead><tr><th></th><th>범위</th><th>열기</th><th>닫기</th></tr></thead>
+     <tbody>
+      <tr><td>OpenVLA 출력</td><td class="n">[0, 1]</td><td class="n">≈ 1</td><td class="n">≈ 0</td></tr>
+      <tr><td>LIBERO 입력</td><td class="n">[−1, +1]</td><td class="n">−1</td><td class="n">+1</td></tr>
+     </tbody>
+    </table>
+    <p>변환 없이 넣으면 모델이 <b>닫으려 할 때 아무 동작 없음</b>(≈0), <b>열려 할 때 닫힘</b>(+1). 그릇을 절대 못 집습니다.</p>
+    <p>OpenVLA 공식 평가 코드는 [0,1] → [−1,+1] → 부호만 남김 → 부호 반전을 하는데, 우리 코드에 이 단계가 빠져 있었습니다.</p>
+    <p class="cap">먼저 배제한 것: unnorm_key (키가 하나뿐이라 맞음), 스텝 수 (400 스텝에서도 0%).</p>
+   </div>
+   <div class="col">
+    <h3>08_policy_sanity로 확인 (task 0, 220 스텝)</h3>
+    <table class="t">
+     <thead><tr><th>조합</th><th>성공</th><th class="n">스텝</th><th class="n">닫기 명령</th><th class="n">원시 ≈0 / ≈1</th></tr></thead>
+     <tbody>
+      <tr><td>180° 회전 + 변환 없음</td><td><span class="chip bad">실패</span></td><td class="n">220</td><td class="n">17</td><td class="n">92% / 8%</td></tr>
+      <tr><td class="hl">180° 회전 + <b>변환</b></td><td class="hl"><span class="chip ok">성공</span></td><td class="n hl">77</td><td class="n hl">40</td><td class="n hl">52% / 48%</td></tr>
+      <tr><td>+ 중앙 crop, 변환 없음</td><td><span class="chip bad">실패</span></td><td class="n">220</td><td class="n">43</td><td class="n">80% / 20%</td></tr>
+      <tr><td>+ 중앙 crop, <b>변환</b></td><td><span class="chip ok">성공</span></td><td class="n">95</td><td class="n">51</td><td class="n">54% / 46%</td></tr>
+     </tbody>
+    </table>
+    <div class="takeaway">원시 그리퍼 값이 0과 1에만 몰리고 음수가 0% → [0,1] 규약 확정. 변환한 쪽만 성공 → 원인 확정. 재수집 결과 <b>13/15 = 86.7%</b>.</div>
+   </div>
+  </div>
+  <div class="foot"><span>PART 7 · 시행착오</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 26 분석 경로 버그 ============ -->
+<section class="slide dense" aria-label="시행착오: 분석 경로 버그 두 개">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 7</span> · 시행착오 ③ 지표 정의를 쓰다가 발견 (10/06 수정)</div><h2>분석 쪽이 정책과 다른 입력을, 서로 다른 행을 보고 있었습니다</h2></div>
+  <div class="body c2">
+   <div class="card"><h3>① 행이 한 칸 어긋남</h3>
+    <p>attention 측정과 knockout은 행동 토큰 <b>자기 자리</b>(291..297)를, KL은 <b>예측하는 자리</b>(290..296)를 썼습니다.</p>
+    <ul><li>첫 번째 행동 값(x 이동)을 정하는 290행은 knockout이 안 걸림 → <b>그 KL은 항상 0</b></li><li>297행(행동이 끝난 뒤를 예측)이 attention 평균에 1/7 섞임</li><li>관찰과 개입이 서로 다른 행을 봐서 H2 비교의 전제가 어긋남</li></ul>
+    <p class="so">수정: 세 가지 모두 Q = [290..296] 사용 + 매번 자동 검사</p></div>
+   <div class="card"><h3>② 끝 토큰(29871) 누락</h3>
+    <p>정책(<code>predict_action</code>)은 학습 때처럼 프롬프트 끝에 <code>▁</code>를 붙이는데, 분석 경로는 붙이지 않았습니다.</p>
+    <table class="t">
+     <thead><tr><th>같은 장면의 행동 칸</th><th class="n">DoF 0</th><th class="n">3</th><th class="n">그리퍼</th></tr></thead>
+     <tbody>
+      <tr><td>없을 때 (수정 전 분석)</td><td class="n">117</td><td class="n">130</td><td class="n">143</td></tr>
+      <tr><td>있을 때 (정책과 같은 입력)</td><td class="n">158</td><td class="n">173</td><td class="n">256</td></tr>
+     </tbody>
+    </table>
+    <p>7개 중 <b>6개가 다른 칸</b>. 그리퍼는 애매한 중간값(143)에서 "확실히 열기"(256)로 → 수정 전 분석은 <b>실제로 실행된 행동과 다른 분포</b>를 보고 있었습니다.</p>
+    <p class="so">수정: 분석·정책·반사실 모두 같은 입력 함수(<code>prepare_inputs</code>) 사용</p></div>
+  </div>
+  <div class="note">로봇을 움직이는 경로는 원래 29871을 붙이고 있었기 때문에 <b>성공률과 궤적은 그대로</b>여야 하고, 바뀌는 것은 분석 값뿐입니다. 같은 장면끼리 수정 전/후를 짝지어 비교할 수 있습니다.</div>
+  <div class="foot"><span>PART 7 · 시행착오</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 27 현재 상태 ============ -->
+<section class="slide dense" aria-label="현재 상태와 한계">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 8</span> · 정리 ① 무엇이 확실한가</div><h2>지금 말할 수 있는 것과 아직 말할 수 없는 것</h2></div>
+  <div class="body c2w top">
+   <table class="t">
+    <thead><tr><th>주장</th><th>근거</th><th>상태</th></tr></thead>
+    <tbody>
+     <tr><td>정책이 정상 동작한다</td><td>13/15 = 86.7%, 정책 경로는 수정과 무관</td><td><span class="chip ok">유지</span></td></tr>
+     <tr><td>지시문 knockout 효과는 대조군보다 훨씬 크다</td><td>364/364행, 최소 4.4배</td><td><span class="chip warn">재확인</span></td></tr>
+     <tr><td>인과적으로 지시문 ≈ 이미지 (반반)</td><td>causal_ratio 0.51</td><td><span class="chip warn">재확인</span></td></tr>
+     <tr><td>attention 비율은 인과를 약하게만 예측 (H2)</td><td>ρ ≈ 0.25</td><td><span class="chip warn">재확인</span></td></tr>
+     <tr><td>에피소드 후반에 지시문 attention이 늘어난다</td><td>R_raw–t ρ = 0.42</td><td><span class="chip warn">재확인</span></td></tr>
+     <tr><td>비율이 상황에 맞게 조절되지 않는다 (H1)</td><td>04 미실행</td><td><span class="chip idle">미검정</span></td></tr>
+    </tbody>
+   </table>
+   <div class="card orange"><h3>공격받을 수 있는 지점</h3>
+    <ul>
+     <li><b>범위</b>: 모델 1개, 스위트 1개, 과제 5개</li>
+     <li><b>전 층 knockout</b>: 학습 분포 밖 상태 + 어느 층인지 모름</li>
+     <li><b>대조군</b>: 흩어진 이미지 토큰 vs 연속된 텍스트, 시드 1개</li>
+     <li><b>sink 제외</b>: BOS도 정보를 나를 수 있다는 반론</li>
+     <li><b>"반반"의 의미</b>: 20개 차단과 256개 차단은 개입 크기가 다름</li>
+     <li><b>통계</b>: 행 간 자기상관 → p 값 과대</li>
+    </ul></div>
+  </div>
+  <div class="foot"><span>PART 8 · 정리</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 28 다음 단계 ============ -->
+<section class="slide dense" aria-label="다음 단계">
+ <div class="inner">
+  <div class="head"><div class="eyebrow"><span class="part">PART 8</span> · 정리 ② 다음 단계</div><h2>다음에 할 일</h2></div>
+  <div class="body c2">
+   <div class="col">
+    <h3>바로 할 것</h3>
+    <ol class="steps">
+     <li><div><b>Stage 3 재수집</b> (02) — 같은 궤적이 나오는지 <code>ep_len</code>으로 확인 후, 장면별로 수정 전/후 짝지어 비교</div></li>
+     <li><div><b>H2 재계산</b> (03) — 에피소드 단위 bootstrap, 대조군은 비율 대신 차이(<code>lang_minus_control</code>)로</div></li>
+     <li><div><b>H1</b> (04) — 같은 그릇이 두 개라 지시문이 꼭 필요한 장면을 골라 4가지 지시 조건 비교</div></li>
+     <li><div><b>문서</b> — <code>docs/07_results.md</code>에 결과와 수정 전/후 비교표</div></li>
+    </ol>
+   </div>
+   <div class="col">
+    <h3>보완할 것 (선행연구에서 나온 숙제)</h3>
+    <ul>
+     <li><b>층 구간 knockout</b> — 4층 단위로 끊어 어느 층에서 지시문이 쓰이는지 (코드는 이미 지원)</li>
+     <li><b>대조군 정합</b> — 템플릿 토큰 대조군, 연속된 이미지 블록, 시드 여러 개</li>
+     <li><b>sink knockout</b> — BOS를 가렸을 때의 효과도 측정</li>
+     <li><b>스텝별 모드 분류</b> — attention과 인과가 맞는 스텝/안 맞는 스텝을 나누기 (2609.00830 방식) → "언어 중심/시각 중심 스텝 그룹화" 아이디어의 원칙적 버전</li>
+     <li><b>의미 개입 vs 구조 개입</b> — knockout KL과 swapped/paraphrase KL을 나란히</li>
+    </ul>
+   </div>
+  </div>
+  <div class="takeaway">최종 목표 — 비율이 잘못돼 있다면 <b>어디를 고쳐야 하는지</b>까지: attention 재분배(IGAR·VAR류), sink gating, representation 조작 중 무엇이 맞는지 판단할 근거를 만드는 것.</div>
+  <div class="foot"><span>PART 8 · 정리</span><span class="pg"></span></div>
+ </div>
+</section>
+
+<!-- ============ 29 용어 사전 ============ -->
+<section class="slide dense" aria-label="용어 사전">
+ <div class="inner">
+  <div class="head"><div class="eyebrow">부록</div><h2>용어 사전</h2></div>
+  <div class="body c2">
+   <table class="t">
+    <tbody>
+     <tr><td><b>VLA</b></td><td>Vision-Language-Action. 이미지+지시문 → 로봇 행동</td></tr>
+     <tr><td><b>토큰</b></td><td>모델이 읽는 최소 단위. 이미지 패치 1장, 단어 조각 1개, 행동 값 1개</td></tr>
+     <tr><td><b>attention</b></td><td>한 토큰이 앞 토큰들에 나눠 주는 주목도. 합 = 1</td></tr>
+     <tr><td><b>sink</b></td><td>내용과 무관하게 주목도가 몰리는 토큰 (주로 BOS)</td></tr>
+     <tr><td><b>uniform baseline</b></td><td>주목도를 토큰마다 똑같이 줬을 때의 R_raw = |L| / (|L|+|V|)</td></tr>
+     <tr><td><b>knockout</b></td><td>특정 토큰을 못 보게 막는 개입 (softmax 이전에 −∞)</td></tr>
+     <tr><td><b>KL divergence</b></td><td>두 확률분포가 얼마나 다른지. 0 = 같음, 단위 nats</td></tr>
+    </tbody>
+   </table>
+   <table class="t">
+    <tbody>
+     <tr><td><b>DoF / bin</b></td><td>행동의 자유도 7개 / 각 값을 나눈 256칸</td></tr>
+     <tr><td><b>greedy</b></td><td>매번 확률이 가장 높은 칸만 고르는 생성 방식 (무작위성 없음)</td></tr>
+     <tr><td><b>teacher forcing</b></td><td>정답(여기서는 이미 만든 행동 토큰)을 강제로 넣고 한 번에 계산</td></tr>
+     <tr><td><b>Q 행</b></td><td>행동 토큰을 <i>예측하는</i> 위치 = 행동 토큰 위치 − 1</td></tr>
+     <tr><td><b>LIBERO</b></td><td>로봇 팔 조작 시뮬레이션 벤치마크. Spatial = 공간 관계 지시 과제</td></tr>
+     <tr><td><b>EGL</b></td><td>모니터 없이 서버에서 화면을 그리는(렌더링) 방식</td></tr>
+     <tr><td><b>에피소드</b></td><td>초기 상태부터 성공 또는 시간 초과까지 한 번의 시도</td></tr>
+    </tbody>
+   </table>
+  </div>
+  <div class="foot"><span>부록</span><span class="pg"></span></div>
+ </div>
+</section>
+
+</main>
+<div class="hint" id="hint"></div>
+<script>
+(function () {
+  var slides = Array.prototype.slice.call(document.querySelectorAll(".slide"));
+  var N = slides.length;
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  slides.forEach(function (s, k) { var p = s.querySelector(".pg"); if (p) p.textContent = pad(k + 1) + " / " + pad(N); s.id = "s" + (k + 1); });
+  var cur = 0, presenting = false;
+  var count = document.getElementById("count"), hint = document.getElementById("hint");
+  function label() { var s = pad(cur + 1) + " / " + pad(N); count.textContent = s; hint.textContent = s + "   ← → 이동 · Esc 종료"; }
+  function show(i) {
+    cur = Math.max(0, Math.min(N - 1, i));
+    slides.forEach(function (s, k) { s.classList.toggle("is-current", k === cur); });
+    if (!presenting) slides[cur].scrollIntoView({ block: "start" });
+    label();
+  }
+  document.getElementById("prev").addEventListener("click", function () { show(cur - 1); });
+  document.getElementById("next").addEventListener("click", function () { show(cur + 1); });
+  function enter() {
+    presenting = true; document.body.classList.add("presenting");
+    slides.forEach(function (s, k) { s.classList.toggle("is-current", k === cur); });
+    label();
+    var r = document.documentElement;
+    if (r.requestFullscreen) { try { var p = r.requestFullscreen(); if (p && p.catch) p.catch(function () {}); } catch (e) {} }
+  }
+  function leave() {
+    presenting = false; document.body.classList.remove("presenting");
+    if (document.fullscreenElement && document.exitFullscreen) { try { document.exitFullscreen(); } catch (e) {} }
+    slides[cur].scrollIntoView({ block: "start" });
+  }
+  document.getElementById("present").addEventListener("click", enter);
+  document.addEventListener("fullscreenchange", function () { if (!document.fullscreenElement && presenting) leave(); });
+  document.getElementById("deck").addEventListener("click", function (e) {
+    if (!presenting) return;
+    show(cur + (e.clientX > window.innerWidth / 3 ? 1 : -1));
+  });
+  document.addEventListener("keydown", function (e) {
+    var k = e.key;
+    if (k === "ArrowRight" || k === "ArrowDown" || k === "PageDown" || (k === " " && presenting)) { e.preventDefault(); show(cur + 1); }
+    else if (k === "ArrowLeft" || k === "ArrowUp" || k === "PageUp") { e.preventDefault(); show(cur - 1); }
+    else if (k === "Home") { e.preventDefault(); show(0); }
+    else if (k === "End") { e.preventDefault(); show(N - 1); }
+    else if (k === "Escape" && presenting) { leave(); }
+    else if ((k === "f" || k === "F") && !presenting && window.innerWidth > 760) { enter(); }
+  });
+  if ("IntersectionObserver" in window) {
+    var io = new IntersectionObserver(function (es) {
+      if (presenting) return;
+      es.forEach(function (en) { if (en.isIntersecting && en.intersectionRatio > .55) { cur = slides.indexOf(en.target); label(); } });
+    }, { threshold: [.55] });
+    slides.forEach(function (s) { io.observe(s); });
+  }
+  label();
+})();
+</script>
+</body>
+</html>
