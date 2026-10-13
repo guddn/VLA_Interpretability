@@ -85,13 +85,17 @@ def one_condition(vla, image, instruction, vspan, cfg, force_ids=None):
     !! 조건마다 |L| 이 달라 **토큰 위치(spans.query)는 조건별로 다시 계산**됩니다.
        공유하는 건 위치가 아니라 action token **id 7개** 입니다.
     """
-    prompt, span = TI.build_prompt(instruction) if instruction.strip() else TI.build_prompt(" ")
+    # 빈 지시문('empty' 조건)은 지시문 토큰이 하나도 없으므로 L 이 비는 게 정상입니다.
+    # 이 경우에만 빈 L 을 허용하고, R 지표는 호출한 쪽에서 NaN 으로 기록합니다.
+    is_empty = not instruction.strip()
+    prompt, span = TI.build_prompt(instruction) if not is_empty else TI.build_prompt(" ")
     inputs = TI.prepare_inputs(vla, prompt, image)   # 29871 포함
     spans = TI.build_spans(
         vla, prompt, span, inputs["input_ids"][0], vspan,
         n_action_tokens=7,
         sink_positions=cfg["tokens"]["sink_positions"],
         instruction_only=cfg["tokens"]["instruction_only"],
+        allow_empty_language=is_empty,
     )
     ids = force_ids if force_ids is not None else cap.generate_action_tokens(vla, inputs, n_action=7)
     c = cap.teacher_forced_capture(vla, inputs, ids, spans.query)
@@ -186,8 +190,12 @@ def main() -> int:
                     for name, instr in conds.items():
                         force = (base_ids if (args.prefix_mode == "shared"
                                               and name != "valid") else None)
-                        c, r, _, ids = one_condition(vla, img, instr, vspan, cfg,
-                                                     force_ids=force)
+                        c, r, sp, ids = one_condition(vla, img, instr, vspan, cfg,
+                                                      force_ids=force)
+                        # 지시문 토큰이 없으면(empty) "언어의 몫" 자체가 정의되지 않으므로 NaN.
+                        # (계산하면 0 이 나오지만, 0 은 "언어를 전혀 안 봄"으로 오해됩니다)
+                        no_lang = len(sp.language) == 0
+                        nan = float("nan")
                         if name == "valid":
                             base, base_ids = c, ids
                         kl = float(M.action_kl(base.action_logits, c.action_logits))
@@ -199,10 +207,11 @@ def main() -> int:
                             "suite": args.suite, "task_id": tid, "episode": ep, "t": t,
                             "condition": name, "instruction": instr,
                             "ambiguous": tid in args.ambiguous_tasks,
-                            "R_raw": float(r.r_raw.mean()),
-                            "R_norm": float(r.r_norm.mean()),
-                            "R_vnorm": float(r.r_vnorm.mean()),
-                            "uniform_baseline": r.uniform_baseline,
+                            "R_raw": nan if no_lang else float(r.r_raw.mean()),
+                            "R_norm": nan if no_lang else float(r.r_norm.mean()),
+                            "R_vnorm": nan if no_lang else float(r.r_vnorm.mean()),
+                            "uniform_baseline": nan if no_lang else r.uniform_baseline,
+                            "n_L": len(sp.language),
                             "KL_vs_valid": kl,
                             "n_identical_dof": same,
                             "prefix_mode": args.prefix_mode,

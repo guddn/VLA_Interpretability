@@ -536,3 +536,17 @@ def test_build_spans_with_action_prefix_token():
     assert prefix_pos not in spans.language
     # DoF 0 을 예측하는 query 가 바로 29871 위치
     assert spans.query[0] == prefix_pos
+
+
+def test_build_spans_empty_instruction_allowed_only_when_requested():
+    """빈 지시문(04 의 'empty' 조건): 기본은 에러, allow_empty_language=True 면 L=[] 로 통과."""
+    prompt, char_span = TI.build_prompt(" ")
+    assert char_span[0] == char_span[1]            # 지시문 0글자
+    tok = _FakeTokenizer(prompt)
+    ids = torch.arange(len(tok._offsets))
+    with pytest.raises(RuntimeError):
+        TI.build_spans(_FakeVLA(tok), prompt, char_span, ids, visual_span=(1, 9))
+    spans = TI.build_spans(_FakeVLA(tok), prompt, char_span, ids, visual_span=(1, 9),
+                           allow_empty_language=True)
+    assert spans.language == []
+    assert len(spans.query) == 7

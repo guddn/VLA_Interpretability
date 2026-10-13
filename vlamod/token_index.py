@@ -177,11 +177,15 @@ def build_spans(
     n_action_tokens: int = 7,
     sink_positions: Sequence[int] = (0,),
     instruction_only: bool = True,
+    allow_empty_language: bool = False,
 ) -> TokenSpans:
     """텍스트 토큰 인덱스를 멀티모달 절대 위치로 매핑하고 구간을 나눕니다.
 
     input_ids : [T_text]  (텍스트만, visual 삽입 전)
     visual_span: probe_visual_span() 결과 (start, end)
+    allow_empty_language: True 면 L 이 비어도 에러를 내지 않습니다.
+        **빈 지시문 조건(04 의 'empty')에서만** 켜세요. 그 외에는 L 이 비면
+        인덱싱이 실패한 것이므로 에러가 맞습니다.
     """
     tokenizer = vla.tokenizer
     ids = input_ids.tolist() if torch.is_tensor(input_ids) else list(input_ids)
@@ -237,7 +241,7 @@ def build_spans(
     #    (2026-10-06 이전에는 A 를 썼습니다 → DoF 0 의 KL 이 항상 0. docs/06_metrics.md §7-1)
     query = [a - 1 for a in action]
 
-    if not language:
+    if not language and not allow_empty_language:
         raise RuntimeError(
             "언어 구간 L 이 비었습니다. instruction 문자 오프셋 매핑이 실패했습니다. "
             "PROMPT_TEMPLATE 이 실제 체크포인트의 템플릿과 같은지 확인하세요."

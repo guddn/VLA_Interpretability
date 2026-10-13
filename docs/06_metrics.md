@@ -209,7 +209,8 @@ $$\#\{d : \arg\max_b p_d(b) \ne \arg\max_b q_d(b)\}$$
 | 컬럼 | 정의 |
 |---|---|
 | `condition` | `valid`(원 지시) / `swapped`(다른 task 지시) / `paraphrase`(동의어 치환) / `empty`(공백 한 칸) |
-| `R_raw`, `R_norm`, `R_vnorm`, `uniform_baseline` | §3 과 동일, 해당 지시문으로 계산 |
+| `n_L` | 그 조건의 지시문 토큰 수. `empty` 는 0 |
+| `R_raw`, `R_norm`, `R_vnorm`, `uniform_baseline` | §3 과 동일, 해당 지시문으로 계산. **`empty` 는 지시문 토큰이 없어 정의되지 않으므로 NaN** (0 으로 두면 "언어를 전혀 안 봄"으로 오해됨) |
 | `KL_vs_valid` | KL(valid ‖ 이 조건). 같은 장면에서 지시만 바꿨을 때의 분포 변화 |
 | `n_identical_dof` | valid 와 argmax bin 이 같은 DoF 수. 7 이면 지시를 바꿔도 행동 동일 |
 | `prefix_mode` | `shared`(기본): 모든 조건이 valid 의 action 토큰을 prefix 로 공유 / `own`: 각자 greedy |
