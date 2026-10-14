@@ -1,354 +1,304 @@
 # 모듈 레퍼런스 — 각 파일이 왜 있고 무엇을 하는가
 
-작성일: 2026-08-25
-대상: `vlamod/` 8개 모듈 + `scripts/` 5개 + `tests/`
+작성 2026-08-25 · **전면 개정 2026-10-14** (Q 행·29871 수정, 그리퍼 변환, 치환·ICBench·경로 모듈 반영)
+대상: `vlamod/` 13개 모듈 + `scripts/` 01–10 + `setup/` 01–08 + `tests/test_core.py`(93개)
+
+> 실험은 스크립트 번호로만 부릅니다. 연구 질문과 각 스크립트가 맡은 역할은 `docs/00_research_plan.md` §5.
 
 ---
 
 ## 0. 전체 데이터 흐름
 
 ```
-LIBERO 환경                    OpenVLA 모델
-  env_libero.py  ──이미지──▶  model_loader.py  (eager 로드)
-                                    │
-                              token_index.py   ← [BOS][V×N][text][A×7] 구간을 실측
-                                    │
-                              capture.py       ← 2-pass: generate → teacher-forced forward
-                                    │
-                      ┌─────────────┴─────────────┐
-                      ▼                           ▼
-                metrics.py                  intervene.py
-             (관찰: R_raw/R_norm/R_vnorm)   (개입: knockout → KL)
-                      └─────────────┬─────────────┘
-                                    ▼
-                              pipeline.py      ← 한 타임스텝 = tidy row 1개
-                                    ▼
-                        scripts/02 → CSV → scripts/03(H2) · 04(H1) → viz.py
+configs/default.yaml ─▶ device.py (apply_env → 환경변수 / apply_overrides → GPU·모델 인자)
+                              │
+LIBERO 환경                   ▼                              OpenVLA 모델
+  env_libero.py ──이미지──▶ preprocess.py(06·08 변형) ──▶ model_loader.py (eager 강제, --gpus 분할)
+  icbench.py (10 모순 지시·판정)                                │
+                                                 token_index.py  ← 구간 실측 + 29871 덧붙이기
+                                                               │      S|V×256|T|L|T|A×7,  Q = A − 1
+                                                     capture.py  ← 2-pass: generate → teacher-forced forward
+                                                               │      (attention·value norm·logit 을 Q 행에서)
+                      ┌──────────────────────┬─────────────────┼──────────────────────┐
+                      ▼                      ▼                 ▼                      ▼
+                 metrics.py            intervene.py       substitute.py          pipeline.py
+              (관찰: R 3종·질량,     (knockout: Q 행→대상   (0층 내용 치환:        (정책 행동 + 그리퍼 변환,
+               KL, causal_ratio)      경로만 차단 = 직접)    우회 경로까지 = 총)     한 스텝 = tidy row)
+                                                               │
+                                    scripts/NN ──▶ outputs/NN_스크립트명/ (paths.py) ──▶ viz.py
 ```
 
-**핵심 설계 원칙 3가지** — 코드 전체가 이걸 따릅니다.
+**설계 원칙 4가지** — 코드 전체가 이걸 따릅니다.
 
-1. **하드코딩 금지, 실측.** "visual 토큰 256개" 같은 문서 속 숫자를 믿지 않고 매번 측정합니다.
-2. **attention 은 증거가 아니라 검정 대상.** 주 증거는 인과 개입(KL)이고, attention 은 그것과 비교되는 피검자입니다.
-3. **틀리면 조용히 틀리지 말고 즉시 죽을 것.** 가정이 깨지면 `assert` / `raise` 로 멈추게 했습니다.
-
----
-
-## 1. `vlamod/model_loader.py` — 모델 로딩과 백본 접근
-
-### 목적
-OpenVLA 를 **attention 을 뽑을 수 있는 상태로** 올리고, 버전마다 다른 내부 구조를 안전하게 찾아냅니다.
-
-### 핵심 요소
-
-| 요소 | 하는 일 |
-|---|---|
-| `load_openvla()` | HF 에서 로드. `attn_implementation != "eager"` 면 **ValueError 로 거부** |
-| `LoadedVLA` (dataclass) | model/processor/device 를 묶고, `decoder_layers`·`n_layers`·`n_heads`·`tokenizer` 를 속성으로 노출 |
-| `find_language_model()` | Prismatic 래퍼 안의 `LlamaForCausalLM` 을 이름 후보 → `named_modules()` 순으로 탐색 |
-| `action_bin_token_ids()` | action bin 256개에 대응하는 vocab id 구간 반환 |
-| `action_logit_slice()` | 전체 vocab logits 에서 action bin 구간만 잘라냄 |
-
-### 왜 이렇게 만들었나
-
-- **`eager` 강제가 이 파일의 존재 이유입니다.** `flash_attention_2` / `sdpa` 로 로드하면
-  `output_attentions=True` 가 **에러 없이 무시**되고 `attentions=None` 이 나옵니다.
-  나중에 디버깅하면 원인을 찾기 어려우므로 로드 시점에 막습니다.
-- 백본 탐색을 하드코딩하지 않은 이유: OpenVLA 는 `language_model` / `llm_backbone.llm` 등
-  버전에 따라 경로가 다릅니다. 틀린 경로를 잡으면 엉뚱한 층에 훅을 겁니다.
-- `action_logit_slice()` 가 중요한 이유: action token 은 7개 DoF 각각이 **256-bin 분류**입니다.
-  전체 vocab(32000) 에 대해 KL 을 재면 무관한 토큰들이 분포를 희석시킵니다.
-  256-bin 으로 좁혀야 "행동이 얼마나 바뀌었나"가 깨끗하게 나옵니다.
-
-### 주의
-`action_bin_token_ids()` 의 오프셋은 OpenVLA 의 `ActionTokenizer` 규약
-(`token_id = vocab_size - bin`) 을 옮긴 것이라 **±1 어긋날 수 있습니다.**
-`scripts/01` 이 실제 생성된 토큰이 이 범위 안에 드는지 검사합니다.
+1. **하드코딩 금지, 실측.** "visual 256개" 같은 문서 속 숫자를 믿지 않고 매번 측정합니다 (`probe_visual_span`).
+2. **attention 은 증거가 아니라 검정 대상.** 주 증거는 인과 개입(KL)과 행동이고, attention 은 그것과 비교되는 피검자입니다.
+3. **틀리면 조용히 틀리지 말고 즉시 죽을 것.** 가정이 깨지면 `raise` (Q 행 검사, 0층 정렬 검사, 지시문-장면 표 대조 등).
+4. **분석 입력 = 정책 입력.** 분석 경로와 실제 롤아웃 경로가 같은 프롬프트·같은 토큰(29871 포함)을 씁니다 (`TI.prepare_inputs`).
 
 ---
 
-## 2. `vlamod/token_index.py` — 토큰 구간 인덱싱 ★ 가장 중요
-
-### 목적
-멀티모달 시퀀스 `[BOS][visual ×N][프롬프트 텍스트][action ×7]` 에서
-**V(비전) / L(언어) / S(sink) / A(action)** 각 구간의 절대 위치를 확정합니다.
-
-**이 파일이 틀리면 그 뒤의 모든 숫자가 무의미해집니다.**
-
-### 핵심 요소
+## 1. `vlamod/device.py` — 환경변수와 GPU 인자
 
 | 함수 | 하는 일 |
 |---|---|
-| `build_prompt()` | 프롬프트 문자열 + **instruction 이 차지하는 문자 오프셋** 반환 |
-| `probe_visual_span()` | **이미지만 다른 두 입력의 embedding 층을 비교**해 visual 구간을 실측 |
-| `token_char_offsets()` | 각 텍스트 토큰의 문자 오프셋 (fast tokenizer → 실패 시 수동 복원) |
-| `build_spans()` | 텍스트 토큰 인덱스를 멀티모달 절대 위치로 매핑하고 4구간으로 분해 |
-| `pretty_print_spans()` | **사람이 눈으로 검증하기 위한 출력** |
+| `apply_env(cfg, args)` | config 의 `env:` 섹션으로 `HF_HOME`·`MUJOCO_GL`·`PYOPENGL_PLATFORM`·`CUDA_DEVICE_ORDER` 설정. **transformers/huggingface_hub/libero import 전에** 불러야 함 |
+| `apply_overrides(mcfg, args)` | `--gpu` / `--gpus` / `--device` / `--model` / `--unnorm-key` / `--headroom-gb` / `--allow-cpu-offload` 반영. `--gpu` 와 `--device` 동시 사용, `CUDA_VISIBLE_DEVICES` 혼용을 감지해 에러 |
+| `resolve_egl_device()` / `probe_egl_devices()` | 렌더링(EGL) 번호를 CUDA 번호와 **별개로** 결정. EGL 이 1개뿐이면 0 |
+| `report_gpu()` | 로드 직후 GPU 이름·사용량 출력, 여유가 적으면 경고 |
 
-### `probe_visual_span()` 의 아이디어
-
-이미지를 바꾸면 visual 토큰 위치의 임베딩만 달라져야 합니다.
-`hidden_states[0]`(embedding 층)은 attention 을 아직 거치지 않았으므로
-**정확히 visual 위치에서만** 차이가 납니다. 그 연속 블록이 visual 구간입니다.
-
-연속적이지 않으면 `RuntimeError` — 구조 가정이 깨졌다는 신호입니다.
-
-### 왜 instruction 만 L 로 잡는가
-
-프롬프트는 `"In: What action should the robot take to {instruction}?\nOut:"` 입니다.
-`"In: What action should the robot take to"` 는 **모든 샘플에 동일**하므로
-여기 걸린 attention 은 지시 *내용*과 무관합니다.
-이걸 L 에 포함시키면 "언어를 본다"가 "템플릿을 본다"로 오염됩니다.
-→ `instruction_only=True`(기본값) 가 이걸 분리하고, 나머지는 `template` 구간으로 갑니다.
-
-### 왜 sink 를 따로 빼는가
-
-`Restoring Linguistic Grounding in VLA`(2603.06001)가 **attention sink** 를
-linguistic blindness 의 원인으로 지목했습니다. BOS 등 sink 토큰이 attention 질량을 크게 먹는데,
-이를 V 에 포함시키면 **비전 비중이 인위적으로 부풀려집니다.**
-→ `sink_positions`(기본 `[0]`)를 별도 집합 S 로 분리하고, `mass_sink` 로 따로 보고합니다.
-
-### 검증 방법
-`pretty_print_spans()` 출력에서 **L 태그가 instruction 내용어에만** 붙었는지 눈으로 봅니다.
-`In`, `What`, `action` 에 L 이 붙어 있으면 인덱싱이 틀린 것입니다.
+**왜 필요한가.** HF 캐시 경로는 `huggingface_hub` import 시점에 확정되므로 순서가 바뀌면 조용히 무시됩니다.
+GPU 번호는 nvidia-smi(PCI 순서) / CUDA 기본(FASTEST_FIRST) / EGL 세 체계가 다르고, `CUDA_DEVICE_ORDER=PCI_BUS_ID` 로 앞의 둘을 맞춥니다.
 
 ---
 
-## 3. `vlamod/capture.py` — attention / value / logit 캡처
-
-### 목적
-한 타임스텝에서 **모든 층·헤드의 attention**, **value 벡터 norm**, **action bin logits** 를 뽑습니다.
-
-### 왜 2-pass 인가 (이 파일의 핵심 설계)
-
-`generate(output_attentions=True)` 로 뽑으려 하면:
-- step 마다 attention tuple 이 쪼개져 나오고,
-- KV cache 때문에 step 0 은 `[B,H,T,T]`, 이후는 `[B,H,1,T]` 로 shape 이 다르고,
-- transformers 버전에 따라 `None` 이 나오기도 합니다.
-
-그래서:
-
-```
-pass 1: generate_action_tokens()      greedy 로 action token 7개 확보
-pass 2: teacher_forced_capture()      [prompt + action] 전체를 한 번에 forward
-```
-
-greedy 이므로 두 pass 의 분포는 **동일합니다.** shape 도 `[L, H, 7, T]` 하나로 고정됩니다.
-
-### 각 산출물
-
-| 필드 | shape | 용도 |
-|---|---|---|
-| `attn` | `[L, H, 7, T]` | action query 행만 잘라 저장 (전체 T×T 를 들고 있지 않음) |
-| `vnorm` | `[L, H, T]` | `v_proj` 출력에 forward hook → head 별 `‖v_j‖` |
-| `action_logits` | `[7, 256]` | 위치 `p_k` 를 예측하는 logits 는 index `p_k − 1` |
-| `action_ids` | `[7]` | 생성된 토큰 |
-
-### value norm 을 왜 따로 뽑나
-Kobayashi et al. (EMNLP 2020) — attention weight `α` 만으로는 실제 기여를 못 봅니다.
-실제 전달되는 것은 `α·v` 이므로 `‖α·v‖ = α·‖v‖` 를 써야 합니다.
-Llama 는 MHA(GQA 아님)이고 `v` 에는 rotary 가 안 걸리므로 `v_proj` 출력을 그대로 쓰면 됩니다.
-
-### 개입 주입점
-`attn_mask_fn` 인자에 `intervene.py` 의 훅을 넣으면
-**같은 캡처 경로로 개입 조건도 측정**됩니다. 관찰과 개입의 코드 경로가 같아야 비교가 공정합니다.
-
----
-
-## 4. `vlamod/metrics.py` — 지표 계산 (순수 함수, GPU 불필요)
-
-### 목적
-캡처된 텐서에서 **비율 3종 + KL** 을 계산합니다. 모델 의존성이 없어 단위 테스트가 가능합니다.
-
-### 지표
-
-| 지표 | 정의 | 이 지표가 필요한 이유 |
-|---|---|---|
-| `R_raw` | `M_L / (M_L + M_V)` | IVAR(2603.06001) **재현용**. 선행연구와 같은 축에서 비교하려면 필요 |
-| `R_norm` | `(M_L/\|L\|) / (M_L/\|L\| + M_V/\|V\|)` | **토큰 개수 비대칭 제거** |
-| `R_vnorm` | `A(s,j)` → `A(s,j)·‖v_j‖` | attention weight 가 아닌 **실제 전달량** 기준 |
-| `uniform_baseline` | `\|L\|/(\|L\|+\|V\|)` | R_raw 의 **기본값**. 이것과 비교해야 의미가 생김 |
-| `action_kl()` | `KL(P‖Q)` over 7×256 | 개입 전후 행동 분포 거리 |
-| `causal_ratio()` | `KL_L/(KL_L+KL_V)` | **인과 기여 비율 — 주 증거** |
-
-### `R_raw` 단독 사용을 왜 금지하는가
-
-|V| ≈ 256, |L| ≈ 5~15 입니다. attention 은 행 합이 1이므로,
-**완전 균등 분포만 가정해도** `R_raw ≈ 15/(15+256) ≈ 0.055` 가 나옵니다.
-즉 "vision 이 94% 먹는다"는 발견이 아니라 **산수**입니다.
-그래서 `uniform_baseline` 을 항상 같이 반환하고, README 에도 함께 보고하도록 적어 뒀습니다.
-
-### `mass_*` 분해
-`mass_v + mass_l + mass_sink + mass_other = 1` 이 성립합니다(단위 테스트로 검증).
-`mass_sink` 가 크면 attention sink 가 지배 중이라는 뜻이고,
-이 경우 `R_raw`/`R_norm` 은 남은 조각을 나눈 값이므로 해석에 주의해야 합니다.
-
----
-
-## 5. `vlamod/intervene.py` — 인과 개입 (knockout)
-
-### 목적
-"attention 이 이만큼 걸려 있다"를 넘어 **"그 경로를 끊으면 행동이 실제로 바뀌는가"** 를 측정합니다.
-
-### 왜 필요한가
-`Embodied Interpretability`(2605.00321)가 "attention score 는 주로 task-irrelevant 영역에
-활성화된다"며 attention 계열을 명시적으로 비판했습니다.
-관찰만 제시하면 이 비판에 그대로 당합니다. **개입이 주 증거이고 attention 은 피검자입니다.**
-
-### 구현
+## 2. `vlamod/model_loader.py` — 모델 로딩과 백본 접근
 
 | 요소 | 하는 일 |
 |---|---|
-| `apply_block(mask, q, k)` | 4D additive mask 의 (q행, k열) 교차점을 `-inf` 로. **순수 함수 → 테스트 가능** |
-| `AttentionKnockout` | 각 decoder layer 에 `forward_pre_hook(with_kwargs=True)` 를 걸어 mask 수정 |
-| `knockout_language()` | action query → **언어 토큰** 경로 차단 |
-| `knockout_vision()` | action query → **비전 토큰** 경로 차단 |
-| `knockout_random_control()` | **언어와 같은 개수**의 visual 토큰을 무작위 차단 ← 대조군 |
+| `load_openvla()` | HF 에서 로드. `attn_implementation != "eager"` 면 **ValueError**. `gpus` 가 2개 이상이면 층 분할 로드 (각 GPU 현재 여유 − headroom 으로 상한 계산, CPU 오프로드는 기본 금지) |
+| `LoadedVLA` | model / processor / device / dtype 을 묶고 `language_model`·`decoder_layers`·`n_layers`·`n_heads`·`tokenizer` 노출 |
+| `find_language_model()` | Prismatic 래퍼 안의 `LlamaForCausalLM` 탐색 (버전마다 경로가 다름) |
+| `action_bin_token_ids()` / `action_logit_slice()` | action bin 256개 vocab id 구간 / 전체 logits 에서 그 구간만 |
 
-### pre-softmax 마스킹인 이유
-softmax **이전**에 `-inf` 를 더하면 나머지 열이 자동으로 재정규화됩니다.
-softmax 이후에 0으로 만들고 다시 normalize 하는 것과 **수치가 다르고**,
-전자가 "그 토큰이 애초에 없었다면"에 더 가깝습니다.
-
-### `knockout_random_control` 이 이 코드에서 가장 중요한 대조군인 이유
-
-"언어를 지웠더니 안 변했다"만으로는 부족합니다. 두 가설이 구분되지 않기 때문입니다:
-- (a) 모델이 언어를 안 쓴다
-- (b) 토큰 몇 개 지우는 건 원래 아무 영향이 없다
-
-같은 개수의 visual 토큰을 무작위로 지운 것과 비교해야 (a)와 (b)가 갈립니다.
-→ `lang_vs_control = KL_L / KL_random`. **1에 가까우면 언어가 특별하지 않다는 뜻**이고,
-이게 오히려 논문에서 가장 강한 형태의 증거가 됩니다.
-
-### 버전 의존성
-transformers 4.40.x 는 4D additive causal mask 를 각 layer 에 `attention_mask=` kwarg 로 넘깁니다.
-상위 버전은 규약이 바뀌어 훅이 깨집니다. 단 **조용히 틀리지 않고 즉시 에러**가 납니다
-(`4D mask 를 기대했는데 ND 가 왔습니다`).
+- **eager 강제가 이 파일의 존재 이유.** flash/sdpa 로 로드하면 `output_attentions=True` 가 에러 없이 무시됩니다.
+- **KL 을 256-bin 으로 좁히는 이유.** 전체 vocab(32000)으로 재면 무관한 토큰이 분포를 희석합니다.
+- bin 오프셋은 OpenVLA `ActionTokenizer` 규약을 옮긴 것 — 01 이 생성 토큰이 범위 안에 드는지 검사합니다 (실측 통과).
+- 메모리: 가중치 약 15GB. A4000(16GB) 단독 로드는 **됩니다**(09 실측: 프로세스 15.1GB, 여유 1.6GB) — 긴 롤아웃에서 OOM 위험이 있어 경고가 뜹니다.
 
 ---
 
-## 6. `vlamod/pipeline.py` — 한 타임스텝 = tidy row 1개
+## 3. `vlamod/token_index.py` — 토큰 구간 인덱싱 ★ 가장 중요
 
-### 목적
-관찰과 개입을 **한 함수 호출로 묶어** CSV 한 줄로 만듭니다. H2 검정이 이 row 들만으로 됩니다.
+**이 파일이 틀리면 그 뒤의 모든 숫자가 무의미해집니다.**
 
-### `analyze_step()` 이 하는 일
-1. 프롬프트 구성 → 구간 분해
-2. 무개입 캡처 → `R_raw`/`R_norm`/`R_vnorm`, `mass_sink`, `mass_other`
-3. 개입 3종(language / vision / random control) 캡처 → `KL_*`
-4. 파생 지표: `causal_ratio`, `lang_vs_control`, `argmax_changed_*`
-5. `_per_layer` 키에 층별 배열 (히트맵용)
+| 요소 | 하는 일 |
+|---|---|
+| `PROMPT_TEMPLATE` | `"In: What action should the robot take to {instruction}?\nOut:"` |
+| `build_prompt()` | 프롬프트 + **instruction 문자 구간**. 지시문은 소문자화·끝 마침표 제거 |
+| `ACTION_PREFIX_TOKEN_ID = 29871` / `append_action_prefix()` | OpenVLA `predict_action` 이 입력 끝에 붙이는 빈 토큰 `▁`. **`input_ids` 와 `attention_mask` 를 함께** 늘림 (한쪽만 늘리면 291 vs 290 에러). 이미 있으면 그대로 |
+| `prepare_inputs()` | processor → device → 29871 — **분석·정책 공통 입력** |
+| `probe_visual_span()` | 이미지만 다른 두 입력의 embedding 층 차이로 visual 구간 실측 (연속이 아니면 에러) |
+| `token_char_offsets()` | 토큰별 문자 오프셋. 덧붙인 29871 은 `(len, len)` 빈 구간으로 채움 |
+| `build_spans()` | 텍스트 인덱스 → 멀티모달 절대 위치, 구간 분해. `allow_empty_language=True` 는 04 의 empty 조건 전용 |
+| `pretty_print_spans()` | 육안 검증용 출력 (A 범위와 Q 범위 포함) |
 
-`R_norm_step0` ~ `R_norm_step6` 도 넣었습니다 — **7개 DoF 중 어느 것이 언어에 더 의존하는지**
-(예: gripper open/close 만 언어를 보는지) 확인용입니다.
+**실측 구간 (spatial task 0)**
 
-### `counterfactual_instruction()`
-같은 장면, 지시만 교체하는 ISS 식 개입.
-**빈 문자열이 아니라 같은 분포의 다른 지시문**으로 바꿉니다 —
-빈 입력은 OOD 라서 "언어를 안 쓴다"가 아니라 "이상한 입력이라 망가졌다"가 되기 때문입니다.
-`n_identical_dof == 7` 이면 지시를 완전히 무시한 것입니다.
+```
+S 0 | V 1–256 | T 257–265 | L 266–285 (20개) | T 286–290 (290 = '▁' 29871) | A 291–297
+Q = 290–296  (= A − 1, action 토큰을 "예측하는" 자리)          시퀀스 길이 298
+```
 
-### `visual_span` 을 인자로 받는 이유
-매 스텝 `probe_visual_span()` 을 돌리면 forward 2회가 추가로 듭니다.
-한 번 실측한 값을 재사용하도록 **강제**(None 이면 ValueError)했습니다.
+- **Q 를 따로 두는 이유.** autoregressive LM 에서 위치 p 의 출력은 p+1 번째 토큰을 예측합니다.
+  attention 측정·knockout·logit 은 **모두 Q 행**을 씁니다. 2026-10-06 이전에는 A 행을 써서 DoF 0 의 KL 이 항상 0이었습니다 (`docs/06_metrics.md` §7-1).
+- **instruction 만 L 로 잡는 이유.** 템플릿 문구는 모든 샘플에 동일해 지시 *내용*과 무관합니다 (`instruction_only=True`).
+- **sink(BOS) 를 따로 빼는 이유.** IGAR 가 sink 를 원인으로 지목했고, BOS 가 attention 의 약 42% 를 먹습니다. V 에 넣으면 비전 비중이 부풀려집니다.
+- **앞 공백 문제.** fast tokenizer offset 은 앞 공백을 포함해서 `▁pick` 이 L 에서 빠지는 버그가 실제로 있었습니다 → 공백을 벗긴 실질 구간으로 겹침 판정. 지시문 단독 토큰화 개수와 ±1 넘게 다르면 경고.
 
 ---
 
-## 7. `vlamod/env_libero.py` — LIBERO 얇은 래퍼
+## 4. `vlamod/capture.py` — attention / value / logit 캡처
 
-### 목적
-suite/task 를 열고, 초기 상태를 세팅하고, 관측을 PIL 이미지로 바꿉니다.
+**2-pass.** `generate(output_attentions=True)` 는 step 마다 shape 이 다르고 버전에 따라 None 이 나오므로:
+
+```
+pass 1: generate_action_tokens()      greedy 로 action token 7개
+pass 2: teacher_forced_capture()      [prompt + action] 전체를 한 번에 forward
+```
+
+| 필드 (`Capture`) | shape | 내용 |
+|---|---|---|
+| `attn` | `[L, H, 7, T]` | **Q 행만** 잘라 저장 |
+| `vnorm` | `[L, H, T]` | `v_proj` 출력 hook → head 별 ‖v_j‖ |
+| `action_logits` | `[7, 256]` | `out.logits[0][Q]` 의 action bin 구간 |
+| `action_ids` | `[7]` | 생성(또는 강제)한 action 토큰 |
+
+- `check_query_rows()` — Q 행이 `[seq_len−8, …, seq_len−2]` 와 정확히 같은지 검사. A 를 넘기면 즉시 에러.
+- `attn_mask_fn` — 개입 주입점. knockout(`intervene`)·치환(`substitute`)·기록기(`Layer0Recorder`) 모두 이 인자로 hook 을 붙입니다.
+  **관찰과 개입의 코드 경로가 같아야** 비교가 공정합니다.
+- 04·06·09 는 모든 조건에서 **같은 action 토큰(base)으로 teacher-forcing** (`prefix_mode=shared`) → 조건 간 KL 을 같은 규약으로 비교.
+
+---
+
+## 5. `vlamod/metrics.py` — 지표 계산 (순수 함수, GPU 불필요)
+
+| 지표 | 정의 | 용도 |
+|---|---|---|
+| `R_raw` | `M_L / (M_L + M_V)` | IVAR 재현. **단독 주장 금지** |
+| `R_norm` | `(M_L/\|L\|) / (M_L/\|L\| + M_V/\|V\|)` | 토큰 개수 비대칭 제거 |
+| `R_vnorm` | `A·‖v‖` 로 가중한 R_raw | Kobayashi+ 2020 (단순화판, `06_metrics.md` §7-4) |
+| `uniform_baseline` | `\|L\|/(\|L\|+\|V\|)` | R_raw 의 기본값 (spatial 실측 약 0.055–0.076) |
+| `mass_v/l/sink/other` | 각 구간 질량, 합 = 1 | `mass_other` 는 **템플릿 + action 토큰** |
+| `action_kl()` | KL(P‖Q), 7 DoF 평균 (`reduction="none"` 이면 DoF 별) | 개입 전후 행동 분포 거리 |
+| `causal_ratio()` | `KL_L/(KL_L+KL_V)` | 인과 비율 — **개입 방식에 따라 값이 달라짐**(09) |
+| `decode_actions()` | argmax bin | 실제 행동 변화(`argmax_changed_*`, `n_identical_dof`) |
+
+- **비율 지표 해석의 함정** (실측으로 확인됨): R_raw 상승은 Text 질량 증가일 수도, Vision 질량 감소일 수도 있습니다 → `mass_l`·`mass_v` 를 함께 보세요.
+  attention 비율 대 인과 비율 상관은 knockout +0.35 / 치환 −0.17 로 부호가 바뀌었습니다(09) — 비율 대 비율 주장은 피하고 **KL_L 과의 관계**로 보고합니다.
+
+---
+
+## 6. `vlamod/intervene.py` — attention knockout (직접 효과)
+
+| 요소 | 하는 일 |
+|---|---|
+| `apply_block(mask, q, k)` | 4D additive mask 의 (q행, k열)을 −inf. 순수 함수 → 테스트 가능 |
+| `AttentionKnockout(query, key, layers=None)` | 각 decoder layer 에 `forward_pre_hook(with_kwargs=True)` 로 mask 수정. `layers` 로 층 구간 지정 가능 (**CLI 미노출**) |
+| `knockout_language` / `knockout_vision` | Q → L / Q → V 차단 |
+| `knockout_random_control(seed=0)` | **\|L\| 개의 무작위 visual 토큰** 차단 — "토큰 몇 개 지우면 원래 바뀐다"를 걸러내는 대조군 |
+
+- **pre-softmax 마스킹** → 나머지 열이 자동 재정규화. "그 토큰이 없었다면"에 가깝습니다.
+- ⚠ **직접 효과만 잽니다.** Q 행만 막으므로 다른 위치를 거친 우회 경로가 열려 있습니다.
+  L 차단은 템플릿 286–289(4개)를, V 차단은 T 257–265 / **L 266–285** / T 286–289(33개)를 거쳐 정보가 Q 로 갈 수 있습니다.
+  → 이미지 의존을 과소평가 (09: 치환/knockout 비율 V 1.58 vs L 1.17). 총 효과는 `substitute.py` 로.
+- `lang_vs_control = KL_L / KL_ctrl` 은 분모가 0 에 가까워 불안정 → `lang_minus_control`·`causal_ratio_adj` 를 쓰세요.
+- transformers 4.40.x 의 4D mask kwarg 규약에 의존. 다르면 즉시 에러.
+
+---
+
+## 7. `vlamod/substitute.py` — 0층 임베딩 치환 (총 효과) — 09 용
+
+OpenVLA 는 `[BOS | projector(패치) | 텍스트 임베딩]` 을 이어 Llama 의 `inputs_embeds` 로 넘기고, Llama 는 위치 임베딩을 더하지 않습니다(RoPE).
+따라서 **0번 decoder layer 입력 = 멀티모달 임베딩** — 여기서 위치를 바꾸면 이후 모든 층·위치가 바뀐 내용을 봅니다.
+
+| 요소 | 하는 일 |
+|---|---|
+| `replace_positions()` | hidden `[B,T,D]` 의 지정 위치를 벡터로 바꾼 **복사본** (dtype 유지, 범위 밖이면 에러) |
+| `EmbeddingSubstitution(positions, vectors)` | 0층 pre-hook. 위치 인자/키워드 인자 둘 다 처리 |
+| `Layer0Recorder(stop=False)` / `record_layer0()` | 0층 입력 기록. `stop=True` 면 기록 후 나머지 31층을 건너뜀 (V 평균 계산용) |
+| `check_alignment()` | **G1**: 0층 입력의 V 가 아닌 모든 위치 == `embed_tokens(텍스트 id)` → 소거법으로 V 위치 확정 |
+| `language_token_ids()` / `language_mean()` | suite 지시문들의 L 토큰 임베딩 **빈도 가중 평균** |
+| `rescale_to_norm()` | 평균 방향 + 원래 평균 크기 (`mean_rescaled`) |
+| `spatial_location_span()` / `overlapping_positions()` | spatial 지시문의 위치구 구간 → L_loc / L_shared |
+
+- **실제 토큰으로 치환하지 않는 이유.** 0층에서 같은 길이의 다른 지시문 임베딩 = 04 swapped, 다른 장면 패치 = 06 other_scene 과 **수학적으로 같습니다**.
+- 검증: transformers 4.40.1 실제 `LlamaDecoderLayer` 소형 모델로 항등 치환 logit 차이 0.0, hook = 수동 `inputs_embeds` 치환 확인. OpenVLA 실측 G1–G3 통과.
+- ⚠ 평균 장면과 현재 장면의 거리가 클수록 V 치환 KL 이 커지는 교란 가능 (09 에서 시간과 ρ 0.57).
+
+---
+
+## 8. `vlamod/pipeline.py` — 정책 행동과 한 스텝 분석
+
+| 함수 | 하는 일 |
+|---|---|
+| `libero_env_action()` | OpenVLA 그리퍼 [0,1](1=열기) → LIBERO [−1,+1](−1=열기): `2x−1` → sign → 부호 반전. **빠지면 성공률 0%** |
+| `policy_action(env_convention=True)` | `prepare_inputs` 로 만든 입력으로 `predict_action` → 그리퍼 변환. env 진행 전용 |
+| `analyze_step()` | 한 스텝: 구간 분해 → base 캡처(R 3종, 질량, DoF 별 R_norm) → knockout 3종 → KL·파생 지표 → tidy row + `_per_layer` |
+| `counterfactual_instruction()` | 이름과 달리 문자열을 다시 토큰화하는 **[L1] 개입** — 04 는 자체 구현을 써서 **중복** (정리 대상) |
+
+`analyze_step` 의 주요 컬럼: `R_raw/R_norm/R_vnorm`, `uniform_baseline`, `mass_sink/other`, `KL_{lang,vis,control}_knockout`,
+`causal_ratio`, `lang_minus_control`, `vis_minus_control`, `causal_ratio_adj`, `argmax_changed_{lang,vis}`, `R_norm_step0..6`. 정의는 `docs/06_metrics.md`.
+
+---
+
+## 9. `vlamod/preprocess.py` — 이미지 변형
+
+| 요소 | 쓰는 곳 | 내용 |
+|---|---|---|
+| `VARIANTS` / `apply_variant()` / `center_crop_resize()` | 08 | 상하/180° 회전 × center crop 조합. **crop 파라미터는 기억에 근거한 재현** → 08 이 경험적으로 비교 (결과: `current` 와 `rot180_crop` 모두 성공, n=1) |
+| `hflip()` | 06 | 좌우 반전 |
+| `patch_shuffle(block=32, seed)` | 06 | 타일을 섞음 (항등 순열 회피, 블록이 안 나눠떨어지면 ValueError) — 색 분포 유지, 공간 구조 파괴 |
+| `noise_image(seed)` | 06 | 균등 난수 이미지 |
+
+---
+
+## 10. `vlamod/env_libero.py` — LIBERO 얇은 래퍼
 
 | 함수 | 하는 일 |
 |---|---|
 | `make_task()` | benchmark → task → bddl → `OffScreenRenderEnv` |
-| `reset_to()` | 에피소드별 초기 상태 |
-| `obs_to_image()` | `agentview_image` → PIL. **`flip=True` 가 기본** |
-| `step_noop()` | 시작 직후 물리 안정화용 no-op 스텝 |
+| `suite_instructions()` | env 를 만들지 않고 suite 전체 지시문 (09 의 L 평균용) |
+| `reset_to()` | 에피소드 번호 → LIBERO 초기 상태 (50개 순환) |
+| `obs_to_image(flip=True)` | `agentview_image` → PIL. `flip=True` 는 **`[::-1, ::-1]` = 180° 회전** (OpenVLA LIBERO 평가와 동일) |
+| `step_noop()` | 시작 직후 물리 안정화 no-op 10스텝 |
 
-### 왜 얇게 만들었나
-LIBERO 의 API 는 버전에 따라 달라지고, 여기서 추상화를 두껍게 하면
-버전이 바뀔 때마다 고쳐야 할 코드가 늘어납니다. 필요한 4개 함수만 노출했습니다.
-
-### 검증 필요 지점 2개
-1. **이미지 상하 반전.** LIBERO 의 `agentview_image` 는 뒤집혀 나옵니다.
-   방향이 틀리면 **vision attention 분석 전체가 무의미**해집니다.
-   `scripts/01 --libero` 가 `outputs/01_smoke_forward/smoke_libero_view.png` 를 저장하니 열어서 확인하세요.
-2. **instruction 속성명.** `task.language` vs `task.task_description` — 버전마다 다릅니다.
-   둘 다 없으면 `RuntimeError`.
+- 방향이 틀리면 vision 분석 전체가 무효 → 01 `--libero` 가 PNG 저장. **좌우는 눈으로 못 잡음** → 성공률이 근거 (13/15).
+- instruction 속성: `task.language` 우선, 없으면 `task_description`.
 
 ---
 
-## 8. `vlamod/viz.py` — 그림
+## 11. `vlamod/icbench.py` — ICBench 방식 모순 지시 (10 용)
 
-### 목적
-논문/발표에 그대로 쓸 수 있는 그림 3종.
-
-| 함수 | 형태 | 용도 |
-|---|---|---|
-| `plot_layerwise()` | 3계열 라인 | 층별 비율 + `uniform_baseline` 기준선 |
-| `plot_ratio_vs_causal()` | 산점도 | **H2 핵심 그림** — attention 비율 vs 인과 기여 |
-| `plot_conditions()` | 막대 | **H1 핵심 그림** — 지시 조건 4종 비교 |
-
-### 강제한 규칙
-- 색은 **시리즈 이름에 고정**(dict). 시리즈가 빠져도 색이 재배정되지 않습니다.
-- **이중 y축 금지.** 스케일이 다르면 그림을 나눕니다.
-- 3계열까지만 색으로 구분.
-- 2계열 이상이면 legend + **직접 라벨**을 함께 (색만으로 식별하지 않도록).
-- 색상 3종은 색맹 판별 검증을 통과했습니다 (OKLab CVD ΔE 9.2, 정상시야 ΔE 24.0).
-  색을 바꾸면 다시 검증하세요.
-- 축·제목은 **영문**입니다. 서버에 한글 폰트가 없으면 네모로 깨지기 때문입니다.
-
----
-
-## 9. `scripts/` — 실행 순서
-
-| 스크립트 | Phase | 무엇을 확정하는가 |
-|---|---|---|
-| `01_smoke_forward.py` | 0~1 | **구조 검증 7단계.** eager 로드 / visual span 실측 / 구간 분해 육안 검증 / action token bin 범위 / attention 행 합 = 1 / 지표 계산 |
-| `02_run_analysis.py` | 2~3 | 롤아웃 돌며 비율 + knockout KL 수집 → `analysis_*.csv`, `perlayer_*.npz` |
-| `03_correlation.py` | H2 | Spearman/Pearson + **대조군 t-검정**(`lang_vs_control` 이 1과 다른가) |
-| `04_counterfactual.py` | H1 | valid / paraphrase / swapped / empty 4조건 비교 |
-| `05_plots.py` | — | 위 결과를 그림으로 |
-
-### `01` 을 먼저 통과시켜야 하는 이유
-02~04 는 전부 `01` 이 확인한 가정 위에서 돕니다.
-특히 **`[4] 토큰 구간 분해` 출력의 육안 검증**은 자동화할 수 없습니다.
-
-### `04` 의 미완성 부분
-`--ambiguous-tasks` 에 **후보 물체가 둘 이상인 task id** 를 직접 지정해야 합니다.
-지정하지 않으면 경고가 뜹니다. 이 조건 없이는
-**"LIBERO 는 원래 언어가 필요 없는 벤치마크 아니냐"** 는 반박을 막을 수 없습니다.
-시뮬레이터를 눈으로 보고 고르는 수밖에 없습니다.
-
----
-
-## 10. `tests/test_core.py` — GPU 없이 도는 검증 14개
-
-### 목적
-모델 없이도 **계산 로직의 실수**를 잡습니다. 서버에 붙기 전에 노트북에서 돌릴 수 있습니다.
-
-| 그룹 | 검증 내용 |
+| 요소 | 하는 일 |
 |---|---|
-| metrics (5) | 균등 attention → `R_raw = \|L\|/(\|L\|+\|V\|)`, `R_norm = 0.5` / 전량 언어 → 1.0 / value norm 이 크면 `R_vnorm > R_raw` / **질량 분해 합 = 1** |
-| KL (2) | `KL(p‖p) = 0`, 양수성, 비대칭성 |
-| causal_ratio (1) | 경계값 |
-| intervene (3) | 대상 셀만 `-inf` / 원본 불변(clone) / 범위 밖 무시 / **softmax 후 해당 열 0 + 나머지 재정규화** |
-| token_index (3) | 프롬프트 오프셋이 instruction 을 정확히 가리키는지 / 언어·템플릿 분리 / 언어 구간이 비면 에러 |
+| `SPATIAL_SCENES` | task → (목표 그릇 위치구, 방해 그릇 위치구). **LIBERO bddl `(:init)` 에서 옮김** |
+| `spatial_variants()` | 원문 → normal / V1 blue bowl / V2 green plate / V3 / V4 under the plate / V5 그릇 없는 위치 / R 방해 그릇 위치. 원문이 표와 다르면 에러 |
+| `empty_location()` | 두 그릇과 기준 물체가 겹치지 않는 위치구 (V5) |
+| `on_plate()` / `object_pos()` | LIBERO 내부 `_eval_predicate(["on", obj, "plate_1"])`·객체 위치 |
+| `classify()` / `first_divergence()` | 결과 범주(target / distractor / wrong_lift / abstain) / 정상 궤적과 말단 위치 2cm 이상 벌어진 첫 스텝 |
 
-### 왜 `apply_block` 을 순수 함수로 뺐나
-훅 안에 로직이 들어 있으면 모델 없이 테스트할 수 없습니다.
-마스크 수정 로직만 분리해서 **가짜 텐서로 검증**할 수 있게 했습니다.
+- 원 ICBench 지시문은 **미공개** → 논문 분류를 따라 만든 것. 논문 수치와 직접 비교 불가.
+- 색 선택: 라메킨이 흰 그릇처럼 보이고 접시 테두리가 붉어서 white·red 는 쓰지 않음.
+- **task 7 / 9 는 배치가 같고 목표만 반대** — 언어 필수 쌍 (R 조건이 곧 서로의 원문).
 
 ---
 
-## 11. 파일별 "여기가 틀리면 무엇이 무너지는가"
+## 12. `vlamod/paths.py` — 출력 경로 규약
+
+`outputs/<NN_스크립트명>/[<tag>/]파일`. `out_dir()`·`out_path()` 로 쓰고, 다른 스크립트 출력은 `find_input()` 으로 읽습니다
+(새 위치 → 없으면 정리 전 `outputs/<파일명>` 을 **경고와 함께**). 경로를 바꿀 때는 이 파일만 고칩니다.
+
+## 13. `vlamod/viz.py` — 그림
+
+`plot_layerwise()`(층별 R + baseline), `plot_ratio_vs_causal()`(H2 산점도), `plot_conditions()`(조건별 막대).
+색은 시리즈 이름에 고정, 이중 y축 금지, 축·제목은 영문(서버 한글 폰트 없음), 3색은 색맹 판별 검증 완료.
+
+---
+
+## 14. `scripts/` — 번호별 역할
+
+| # | 스크립트 | GPU | 무엇을 하는가 | 출력 (`outputs/…`) |
+|---|---|---|---|---|
+| 01 | `01_smoke_forward.py` | ✓ | 구조 검증: 로딩·visual span·구간 분해(육안)·action bin 범위·Q 행 argmax == 생성 토큰 7/7·행 합 1·지표 | `01_smoke_forward/` |
+| 02 | `02_run_analysis.py` | ✓ | 롤아웃하며 stride 마다 `analyze_step` (R + knockout KL), 에피소드 성공 기록 | `02_run_analysis/` |
+| 03 | `03_correlation.py` | — | R 3종 ↔ causal / KL_L 상관 (t-검정 부분은 부적절, 교체 예정) | `03_correlation/` |
+| 04 | `04_counterfactual.py` | ✓ | 지시 조건 valid / paraphrase / swapped / empty | `04_counterfactual/` |
+| 05 | `05_plots.py` | — | 02·04 결과 그림 4장 | `05_plots/` |
+| 06 | `06_image_ablation.py` | ✓ | 이미지 조건 valid / other_scene / hflip / patch_shuffle / noise (2-pass: 프레임 수집 → 분석) | `06_image_ablation/` |
+| 07 | `07_dump_model_input.py` | ✓ | `pixel_values` 를 백본별 PNG 로 복원 | `07_dump_model_input/` |
+| 08 | `08_policy_sanity.py` | ✓ | 이미지 변형 × 그리퍼 변환 on/off 성공 비교 | (콘솔) |
+| 09 | `09_embedding_substitution.py` | ✓ | 같은 프레임에서 knockout 3 + 평균 치환 3 + rescaled 2 + 위치구 구간 2, 통과 기준 G1–G4 | `09_embedding_substitution/` |
+| 10 | `10_icbench_rollout.py` | ✓ | 모순 지시 7종 롤아웃 (행동만), `--dry-run` 은 지시문 표만 (GPU 불필요) | `10_icbench_rollout/` |
+| 11 | (예정) | ✓ | 10 의 행동 재생 → 같은 프레임에 정상·모순 지시 → 가짜 성공 예측 | — |
+
+공통 인자: `--gpu` / `--gpus` / `--device`, `--model`, `--unnorm-key`, `--hf-home`, `--config`, `--egl-device`. `--tag` 는 02·04·06·09·10.
+**순서**: 01 통과 → 08 로 성공 1회 확인 → 나머지. 궤적이 GPU 종류에 따라 달라지므로 비교할 실험은 같은 종류 GPU 로.
+
+## 15. `setup/`
+
+| 파일 | 역할 |
+|---|---|
+| `01_env.sh` / `02_libero.sh` | conda env + torch(cu118/cu121) + OpenVLA / LIBERO + 버전 되돌리기 |
+| `03_download_ckpt.py` | 체크포인트(~15GB), `env.hf_home` 사용 |
+| `04_verify.py` | 설치 상태 점검 (EGL 실렌더링 포함) → `outputs/setup_04_verify/` |
+| `05_diag_render.py` | 렌더링 실패 지점 단계별 특정 → `outputs/setup_05_diag_render/` |
+| `06_gpu_map.py` / `07_egl_probe.py` / `08_diag_robosuite.py` | GPU 번호 체계 대조 / EGL 디바이스·벤더 / robosuite↔mujoco 정합성 |
+
+## 16. `tests/test_core.py` — GPU 없이 도는 93개
+
+| 그룹 | 검증 |
+|---|---|
+| metrics · KL · causal_ratio | 균등 attention → R_raw = baseline, R_norm = 0.5 / 질량 합 1 / KL 성질 |
+| intervene | 대상 셀만 −inf, 원본 불변, softmax 후 재정규화 |
+| token_index | 프롬프트 오프셋, L·템플릿 분리, 앞 공백 토큰 포함·`?` 제외, 빈 L 에러, **29871 덧붙이기·mask**, **Q 행 검사**, empty 허용 조건 |
+| device · apply_env · multi-GPU | 인자 파싱·충돌 감지, EGL 규칙, HF_HOME 우선순위, `--gpus` 파싱, headroom |
+| preprocess (06) | hflip 항등성, patch_shuffle 픽셀 보존·재현성·블록 검사, noise 결정성 |
+| paths | 번호 폴더, tag 하위 폴더, 옛 위치 폴백 경고 |
+| substitute (09) | 치환 위치·복사·dtype, rescale, **G1 정렬**, 위치구 분리, hook(위치/키워드 인자), 기록기 중단 |
+| icbench (10) | 10개 task 변형 형식, V5 위치 규칙, R = 방해 그릇 위치구, 원문 불일치 에러, 결과 범주·갈라짐 시점 |
+
+---
+
+## 17. 파일별 "여기가 틀리면 무엇이 무너지는가"
 
 | 파일 | 틀렸을 때의 증상 | 방어 장치 |
 |---|---|---|
-| `model_loader` | `attentions=None`, 조용한 실패 | 로드 시 `eager` 강제 |
-| `token_index` | 모든 숫자가 무의미 | `probe_visual_span` 실측 + `pretty_print_spans` 육안 검증 + L 비면 에러 |
-| `capture` | shape 불일치, action 위치 벗어남 | `RuntimeError` + 행 합 = 1 검사 |
-| `metrics` | 지표가 산수 결과일 뿐 | `uniform_baseline` 동반 보고 |
-| `intervene` | 개입이 안 걸렸는데 걸린 줄 앎 | mask 차원 검사 + 랜덤 대조군 |
-| `env_libero` | 이미지 상하 반전 → vision 분석 전부 무효 | 스모크 테스트가 PNG 저장 |
+| `model_loader` | `attentions=None`, 조용한 실패 | 로드 시 eager 강제 |
+| `token_index` | 모든 숫자가 무의미 | visual span 실측 + 육안 검증 + 빈 L 에러 + 토큰 수 대조 경고 |
+| `capture` | 한 칸 밀린 행 (DoF 0 KL = 0) | `check_query_rows` + 01 의 argmax 7/7 검사 |
+| `metrics` | 비율이 산수 결과일 뿐 | `uniform_baseline`·질량 동반 보고 |
+| `intervene` | 개입이 안 걸렸는데 걸린 줄 앎 / 직접 효과를 총 효과로 오해 | mask 차원 검사 + 무작위 대조군 / 09 와 비교 |
+| `substitute` | 엉뚱한 위치를 치환 | G1 정렬(매 프레임) + G2 항등 치환 KL ≈ 0 |
+| `pipeline` | 성공률 0% (그리퍼 규약) / 분석 입력 ≠ 정책 입력 | `libero_env_action`, `prepare_inputs` 공용 |
+| `env_libero` | 이미지 방향 오류 → vision 분석 무효 | 01 PNG + 성공률 |
+| `icbench` | 장면과 안 맞는 '모순' 지시 | 원문-장면 표 대조 에러 + `--dry-run` 검토 |

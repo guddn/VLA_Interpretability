@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# Phase 0-a: conda 환경 + OpenVLA 설치
+# setup 01: conda 환경 + OpenVLA 설치
 # 대상: NVIDIA GPU (24GB 이상 권장), CUDA 12.x
 #
 # 실행 순서:

@@ -1,4 +1,4 @@
-"""Phase 3: 인과 개입 (attention knockout).
+"""인과 개입 (attention knockout) — Q 행 → 대상 경로만 차단 = 직접 효과.
 
 관찰(attention)만으로는 Embodied Interpretability(2605.00321)의
 "attention 은 task-irrelevant 영역에 뜬다" 비판에 그대로 당합니다.

@@ -240,7 +240,7 @@ body.presenting .hint { display: block; position: fixed; right: 16px; bottom: 12
    <div class="col"><span class="cap">모델</span><b>OpenVLA-7B</b><span class="cap">LIBERO-Spatial 파인튜닝 체크포인트</span></div>
    <div class="col"><span class="cap">환경</span><b>LIBERO 시뮬레이션</b><span class="cap">로봇 팔 조작 과제, 5개 task</span></div>
    <div class="col"><span class="cap">방법</span><b>관찰 + 인과 개입</b><span class="cap">attention 비율 vs attention knockout</span></div>
-   <div class="col"><span class="cap">현재</span><b>Stage 3 재수집 직전</b><span class="cap">분석 경로 버그 2건 수정 완료</span></div>
+   <div class="col"><span class="cap">현재</span><b>02 재수집 직전</b><span class="cap">분석 경로 버그 2건 수정 완료</span></div>
   </div>
   <div class="foot"><span>표지</span><span class="pg"></span></div>
  </div>
@@ -554,20 +554,23 @@ body.presenting .hint { display: block; position: fixed; right: 16px; bottom: 12
 <!-- ============ 14 단계 지도 ============ -->
 <section class="slide dense" aria-label="실험 단계와 스크립트 지도">
  <div class="inner">
-  <div class="head"><div class="eyebrow"><span class="part">PART 5</span> · 코드 구조 ① 전체 지도</div><h2>실험은 Stage 0~6, 단계마다 담당 파일이 정해져 있습니다</h2>
-   <p class="lede">앞 단계가 통과해야 뒤 단계 숫자를 믿을 수 있게 짰습니다. 노트북(Windows)은 코드 편집과 단위 테스트, GPU 서버(Linux)는 나머지 전부를 맡습니다.</p></div>
+  <div class="head"><div class="eyebrow"><span class="part">PART 5</span> · 코드 구조 ① 전체 지도</div><h2>실험은 스크립트 번호로 부릅니다 — 번호마다 맡은 질문이 있습니다</h2>
+   <p class="lede">앞 번호가 통과해야 뒤 번호 숫자를 믿을 수 있게 짰습니다. 노트북(Windows)은 코드 편집과 단위 테스트, GPU 서버(Linux)는 나머지 전부를 맡습니다.</p></div>
   <table class="t">
-   <thead><tr><th>Stage</th><th>하는 일</th><th>파일</th><th>통과 기준</th><th>상태</th></tr></thead>
+   <thead><tr><th>#</th><th>하는 일</th><th>파일</th><th>통과 기준</th><th>상태 (10/14)</th></tr></thead>
    <tbody>
-    <tr><td class="f">0</td><td>GPU 없이 로직 검증</td><td class="f">tests/test_core.py</td><td>단위 테스트 65개</td><td><span class="chip ok">통과</span></td></tr>
-    <tr><td class="f">1</td><td>서버 환경 구축</td><td class="f">setup/01 → 04</td><td><code>04_verify</code> 13/13</td><td><span class="chip ok">통과</span></td></tr>
-    <tr><td class="f">2</td><td>구조 검증 (토큰 위치·attention 모양)</td><td class="f">scripts/01_smoke_forward</td><td>7단계 모두 정상, L 태깅 육안 확인</td><td><span class="chip ok">통과</span></td></tr>
-    <tr><td class="f">2.5</td><td>모델이 실제로 본 이미지 확인</td><td class="f">scripts/07_dump_model_input</td><td>렌더 이미지와 구도 일치</td><td><span class="chip ok">통과</span></td></tr>
-    <tr><td class="f">2.9</td><td>정책이 과제를 성공하는지</td><td class="f">scripts/08_policy_sanity</td><td>성공 1회 이상</td><td><span class="chip ok">통과</span></td></tr>
-    <tr><td class="f">3</td><td>롤아웃하며 비율 + KL 수집</td><td class="f">scripts/02_run_analysis</td><td>성공률이 논문 수준</td><td><span class="chip warn">재수집 필요</span></td></tr>
-    <tr><td class="f">4</td><td>H2 검정 (상관)</td><td class="f">scripts/03_correlation</td><td>—</td><td><span class="chip idle">대기</span></td></tr>
-    <tr><td class="f">5</td><td>H1 검정 (지시문 바꾸기)</td><td class="f">scripts/04_counterfactual</td><td>—</td><td><span class="chip idle">대기</span></td></tr>
-    <tr><td class="f">6</td><td>그림</td><td class="f">scripts/05_plots</td><td>—</td><td><span class="chip idle">대기</span></td></tr>
+    <tr><td class="f">test</td><td>GPU 없이 로직 검증</td><td class="f">tests/test_core.py</td><td>단위 테스트 93개</td><td><span class="chip ok">통과</span></td></tr>
+    <tr><td class="f">setup</td><td>서버 환경 구축</td><td class="f">setup/01 → 04</td><td><code>04_verify</code> 전 항목</td><td><span class="chip ok">통과</span></td></tr>
+    <tr><td class="f">01</td><td>구조 검증 (토큰 위치·Q 행·attention 모양)</td><td class="f">scripts/01_smoke_forward</td><td>Q 행 argmax 7/7, L 태깅 육안 확인</td><td><span class="chip ok">통과</span></td></tr>
+    <tr><td class="f">07</td><td>모델이 실제로 본 이미지 확인</td><td class="f">scripts/07_dump_model_input</td><td>렌더 이미지와 구도 일치</td><td><span class="chip ok">통과</span></td></tr>
+    <tr><td class="f">08</td><td>정책이 과제를 성공하는지</td><td class="f">scripts/08_policy_sanity</td><td>성공 1회 이상</td><td><span class="chip ok">통과</span></td></tr>
+    <tr><td class="f">02</td><td>롤아웃하며 비율 + knockout KL 수집</td><td class="f">scripts/02_run_analysis</td><td>성공률이 논문 수준</td><td><span class="chip ok">재수집 완료</span></td></tr>
+    <tr><td class="f">03</td><td>H2 검정 (상관)</td><td class="f">scripts/03_correlation</td><td>—</td><td><span class="chip ok">완료</span></td></tr>
+    <tr><td class="f">04</td><td>H1 검정 (지시문 바꾸기)</td><td class="f">scripts/04_counterfactual</td><td>—</td><td><span class="chip ok">완료</span></td></tr>
+    <tr><td class="f">05</td><td>그림</td><td class="f">scripts/05_plots</td><td>—</td><td><span class="chip ok">완료</span></td></tr>
+    <tr><td class="f">06</td><td>이미지 바꾸기</td><td class="f">scripts/06_image_ablation</td><td>—</td><td><span class="chip ok">완료</span></td></tr>
+    <tr><td class="f">09</td><td>임베딩 치환(총 효과) vs knockout(직접 효과)</td><td class="f">scripts/09_embedding_substitution</td><td>G1–G4</td><td><span class="chip ok">완료</span></td></tr>
+    <tr><td class="f">10</td><td>ICBench 방식 모순 지시 롤아웃</td><td class="f">scripts/10_icbench_rollout</td><td>실제 실패 ≥ 10</td><td><span class="chip idle">파일럿 대기</span></td></tr>
    </tbody>
   </table>
   <div class="note">공통 부품은 <code>vlamod/</code> 패키지에, 설정은 <code>configs/default.yaml</code>에, 지표 정의는 <code>docs/06_metrics.md</code>에 있습니다.</div>
@@ -742,7 +745,7 @@ body.presenting .hint { display: block; position: fixed; right: 16px; bottom: 12
   <div class="body c2w">
    <div class="col">
     <div class="stats wide">
-     <div class="stat"><div class="stat-v">6.4<small>배</small></div><div class="stat-l"><b>R_raw ÷ uniform baseline</b> (Stage 3, 364행 평균 0.417 ÷ 0.066). 토큰 개수만큼 나눠 줬을 때보다 지시문을 6배 넘게 봅니다.</div></div>
+     <div class="stat"><div class="stat-v">6.4<small>배</small></div><div class="stat-l"><b>R_raw ÷ uniform baseline</b> (02, 364행 평균 0.417 ÷ 0.066). 토큰 개수만큼 나눠 줬을 때보다 지시문을 6배 넘게 봅니다.</div></div>
      <div class="stat"><div class="stat-v">0.85</div><div class="stat-l"><b>R_norm</b> 평균. 0.5가 동등이므로 지시문 토큰 1개가 이미지 토큰 1개보다 훨씬 많이 주목받습니다.</div></div>
      <div class="stat"><div class="stat-v">≈0.40</div><div class="stat-l"><b>R_vnorm</b> 평균. value 크기로 가중해도 R_raw와 거의 같습니다.</div></div>
      <div class="stat"><div class="stat-v">42<small>%</small></div><div class="stat-l"><b>BOS 한 토큰</b>이 가져가는 주목도. 이미지와 지시문을 다 합쳐도 약 18%입니다.</div></div>
@@ -753,7 +756,7 @@ body.presenting .hint { display: block; position: fixed; right: 16px; bottom: 12
      <p>분모가 이미지+지시문뿐이라, 전체 주목도로 환산하면 <b>지시문 ≈ 6.5%</b>, 이미지 ≈ 11.4%입니다. 나머지 80% 넘게는 BOS와 템플릿·행동 토큰으로 갑니다.</p></div>
     <div class="card"><h3>sink 질량은 입력과 무관해 보임</h3>
      <p>난수 이미지 실행과 LIBERO 실행에서 BOS 질량이 0.4334 / 0.4337로 거의 같았습니다. 이미지·지시문·길이가 다 달라도 그대로 → 구조적 성질이라는 정황 (각 1회씩이라 근거로는 약함).</p></div>
-    <p class="cap">Stage 3 값은 10/06 수정 <b>전</b> 코드 기준. "42%·6.5%·11.4%"는 수정 후 단일 장면(task 0, t=0).</p>
+    <p class="cap">02 의 이 값은 10/06 수정 <b>전</b> 코드 기준. "42%·6.5%·11.4%"는 수정 후 단일 장면(task 0, t=0).</p>
    </div>
   </div>
   <div class="foot"><span>PART 6 · 결과</span><span class="pg"></span></div>
@@ -764,7 +767,7 @@ body.presenting .hint { display: block; position: fixed; right: 16px; bottom: 12
 <section class="slide dense" aria-label="결과: 개입">
  <div class="inner">
   <div class="head"><div class="eyebrow"><span class="part">PART 6</span> · 결과 ② 인과 개입</div><h2>지시문 20개를 가린 효과 ≈ 이미지 256개를 가린 효과</h2>
-   <p class="lede">Stage 3: LIBERO-Spatial 5 task × 3 에피소드, 5스텝마다 분석 → 364행. 성공 <b>13/15 (86.7%)</b>.</p></div>
+   <p class="lede">02: LIBERO-Spatial 5 task × 3 에피소드, 5스텝마다 분석 → 364행. 성공 <b>13/15 (86.7%)</b>.</p></div>
   <div class="body c2w">
    <div class="col">
     <h3>평균 KL (클수록 행동이 많이 바뀜, nats)</h3>
@@ -936,7 +939,7 @@ body.presenting .hint { display: block; position: fixed; right: 16px; bottom: 12
    <div class="col">
     <h3>바로 할 것</h3>
     <ol class="steps">
-     <li><div><b>Stage 3 재수집</b> (02) — 같은 궤적이 나오는지 <code>ep_len</code>으로 확인 후, 장면별로 수정 전/후 짝지어 비교</div></li>
+     <li><div><b>02 재수집</b> — 같은 궤적이 나오는지 <code>ep_len</code>으로 확인 후, 장면별로 수정 전/후 짝지어 비교</div></li>
      <li><div><b>H2 재계산</b> (03) — 에피소드 단위 bootstrap, 대조군은 비율 대신 차이(<code>lang_minus_control</code>)로</div></li>
      <li><div><b>H1</b> (04) — 같은 그릇이 두 개라 지시문이 꼭 필요한 장면을 골라 4가지 지시 조건 비교</div></li>
      <li><div><b>문서</b> — <code>docs/07_results.md</code>에 결과와 수정 전/후 비교표</div></li>

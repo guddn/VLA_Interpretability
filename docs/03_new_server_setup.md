@@ -246,13 +246,16 @@ python setup/04_verify.py --gpus 0,6
 통과 10 / 10
 ```
 
+> 위 출력은 **형식 예시**입니다 (CUDA 번호·GPU 이름은 서버와 `CUDA_DEVICE_ORDER` 설정에 따라 다름).
+> 이 서버에서 실측으로 확인된 매핑은 cuda:0 = A4000, cuda:4 = A4000, cuda:5 = A6000 — 나머지는 `nvidia-smi --query-gpu=index,name --format=csv` 로 확인하세요.
+
 **`outputs/setup_04_verify/verify_render.png` 를 열어 로봇 팔이 똑바로 서 있는지 눈으로 확인하세요.**
-LIBERO 이미지는 상하가 뒤집혀 나오는데, 방향이 틀리면 vision attention 분석 전체가
+LIBERO 이미지는 뒤집혀 나와서 `obs_to_image` 가 180° 회전(`[::-1, ::-1]`)으로 바로잡습니다. 방향이 틀리면 vision attention 분석 전체가
 무의미해집니다. 뒤집혀 있으면 `vlamod/env_libero.py` 의 `obs_to_image(flip=...)` 를 바꿉니다.
 
 ---
 
-## 9. Stage 2 로 (30분)
+## 9. 01 구조 검증으로 (30분)
 
 ```bash
 python scripts/01_smoke_forward.py --gpu <번호>

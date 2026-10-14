@@ -1,4 +1,4 @@
-"""Phase 2: attention / value-norm / action logit 캡처.
+"""attention / value-norm / action logit 캡처.
 
 전략: generate 로 attention 을 뽑으려 하지 마세요.
   - generate 는 step 마다 attention tuple 이 쪼개져 나오고, KV cache 때문에

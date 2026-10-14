@@ -1,4 +1,4 @@
-"""Phase 2+3: LIBERO 롤아웃을 돌면서 매 스텝 비율 + knockout KL 을 기록.
+"""02: LIBERO 롤아웃을 돌면서 매 스텝 비율 + knockout KL 을 기록.
 
 출력: outputs/02_run_analysis/analysis_<suite>.csv  (tidy)
       outputs/02_run_analysis/perlayer_<suite>.npz  (층별 배열)

@@ -1,4 +1,4 @@
-"""Stage 1 최종 검증 — 설치를 다시 하지 않고 **상태만** 점검합니다.
+"""setup 04: 설치 최종 검증 — 설치를 다시 하지 않고 **상태만** 점검합니다.
 
 **A6000 서버(Linux)에서 실행하세요.** 노트북(Windows)의 역할은 `pytest` 뿐입니다.
 
@@ -23,7 +23,7 @@
 그게 통과해도 실제 렌더링은 죽을 수 있습니다.
 
 여기서는 `OffScreenRenderEnv` 를 실제로 띄우고 **프레임을 한 장 뽑아
-PNG 로 저장**합니다. 이게 통과하면 Stage 2 로 넘어가도 됩니다.
+PNG 로 저장**합니다. 이게 통과하면 scripts/01 로 넘어가도 됩니다.
 
 각 항목은 독립적으로 검사하고, 실패해도 계속 진행한 뒤 마지막에 요약합니다.
 """
@@ -357,7 +357,7 @@ def main() -> int:
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 
-    print("\n=== Stage 1 검증 " + "=" * 48)
+    print("\n=== setup 04 검증 " + "=" * 47)
     c_python()
     c_constraint()
     c_numpy()
@@ -401,7 +401,7 @@ def main() -> int:
 
     flag = (f"--gpus {','.join(map(str, gpu_list))}" if len(gpu_list) > 1
             else f"--gpu {gpu_list[0]}")
-    print("\n전부 통과했습니다. Stage 2 로 가세요:")
+    print("\n전부 통과했습니다. scripts/01 로 가세요:")
     print(f"  python scripts/01_smoke_forward.py {flag}")
     if len(gpu_list) > 1:
         print("  (분할 로드가 실제로 되는지는 여기서 처음 판명됩니다 — 미검증 경로입니다)")

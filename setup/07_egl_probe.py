@@ -249,7 +249,7 @@ def main() -> int:  # noqa: C901
                     low = s.lower()
                     if any(k in low for k in ("llvmpipe", "softpipe", "swrast", "mesa")):
                         print("    ★ 소프트웨어 렌더러입니다 (CPU). 동작은 하지만 매우 느립니다.")
-                        print("      Stage 3 롤아웃 시간이 몇 배로 늘어납니다.")
+                        print("      02 롤아웃 시간이 몇 배로 늘어납니다.")
                     elif "nvidia" in low or "quadro" in low or "rtx" in low:
                         print("    ✓ NVIDIA GPU 렌더링입니다.")
         except Exception as e:  # noqa: BLE001

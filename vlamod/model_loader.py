@@ -125,7 +125,7 @@ def load_openvla(
     if attn_implementation != "eager":
         raise ValueError(
             f"attn_implementation={attn_implementation!r} 로는 attention 을 못 뽑습니다. "
-            "'eager' 를 쓰세요. (계획서 Phase 0 실무 함정)"
+            "'eager' 를 쓰세요. (docs/01_module_reference.md §2)"
         )
 
     torch_dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[dtype]
@@ -150,7 +150,7 @@ def load_openvla(
                 f"   1) --headroom-gb 0.8  로 마진을 줄인다 (OOM 위험 증가)\n"
                 f"   2) --allow-cpu-offload 로 일부 층을 CPU 로 넘긴다 (매우 느림, 구조 검증용)\n"
                 f"   3) 더 빈 GPU 를 기다린다 (24GB 한 장이면 --gpu N 으로 충분)\n"
-                f"   4) --device cpu 로 CPU 에서만 돌린다 (Stage 2 구조 검증에는 충분)"
+                f"   4) --device cpu 로 CPU 에서만 돌린다 (01 구조 검증에는 충분)"
             )
             if not cpu_offload:
                 raise RuntimeError(msg)

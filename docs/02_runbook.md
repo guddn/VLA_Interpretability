@@ -1,396 +1,311 @@
 # 실행 런북 — 무엇을, 어떤 순서로, 어디까지 확인하고 넘어갈 것인가
 
-작성일: 2026-08-25 (개정: 2026-09-04 — GPU 인자 반영)
-전제: A6000 서버, Ubuntu, CUDA 12.x / 로컬은 C:\Users\hello\PycharmProjects\VLA_Interpretability
+작성 2026-08-25 · 개정 2026-09-04(GPU 인자) · **전면 개정 2026-10-14 (스크립트 번호 기준, 06–10 추가)**
+전제: 랩 GPU 서버(Ubuntu) / 로컬은 `C:\Users\hello\PycharmProjects\VLA_Interpretability`
 
-> 각 단계에 **통과 기준(Gate)** 이 있습니다. 기준을 못 넘으면 다음 단계로 가지 마세요.
-> 앞 단계의 가정 위에서 뒤 단계가 돌기 때문에, 조용히 틀린 채로 진행하면 3일 뒤에 전부 다시 해야 합니다.
+> 실험은 **스크립트 번호**로만 부릅니다 ("Stage" 표기 폐지).
+> 각 스크립트에 **통과 기준(Gate)** 이 있습니다. 못 넘으면 다음으로 가지 마세요 — 앞 스크립트의 가정 위에서 뒤가 돕니다.
+> 연구 질문과 단계(존재 → 측정 → 원인 → 개선)는 `docs/00_research_plan.md` §4.
 
 ---
 
 ## 파이프라인 한눈에
 
 ```
-Stage 0   노트북      pytest                     ← GPU 불필요. 로직 검증
-   ↓
-Stage 1   서버        setup/01,02,03             ← 환경 + LIBERO + 체크포인트
-   ↓
-Stage 2   서버 ★      scripts/01_smoke_forward   ← 구조 검증 7단계. 여기가 관문
-   ↓
-Stage 3   서버        scripts/02_run_analysis    ← 데이터 수집 (비율 + knockout KL)
-   ↓
-        ┌────────────┴────────────┐
-        ▼                         ▼
-Stage 4  scripts/03_correlation   Stage 5  scripts/04_counterfactual
-         (H2: 지표 타당성)                  (H1: 비적응성)
-        └────────────┬────────────┘
-                     ▼
-Stage 6   scripts/05_plots        ← 그림 4장
+pytest (노트북, GPU 불필요) ─▶ setup/01–04 (서버 환경) ─▶ 01 구조 검증 ★관문 ─▶ 08 정책 성공 1회 ★
+                                                                                      │
+        ┌────────────────────────┬───────────────────────┬────────────────────────────┤
+        ▼                        ▼                       ▼                            ▼
+   02 롤아웃 + R + knockout   04 지시 조건            06 이미지 조건            09 치환 vs knockout
+        │                        │                       │                            │
+   03 상관(H2) · 05 그림 ◀───────┘                       │                            │
+                                                         ▼                            ▼
+                             10 ICBench 방식 롤아웃 (1단계: 편향 존재) ─▶ 11 가짜 성공 예측 (예정)
 ```
 
-산출물 흐름:
+07 은 모델 입력 픽셀 확인용 (필요할 때만).
+
+산출물:
 
 ```
 outputs/
   01_smoke_forward/      smoke_libero_view.png, smoke_capture.pt
-  02_run_analysis/       analysis_<suite>.csv (타임스텝별 tidy row), perlayer_<suite>.npz (층별 배열)
-    <tag>/               --tag 를 준 실행은 하위 폴더 (파일명에도 tag 유지)
+  02_run_analysis/       analysis_<suite>.csv, perlayer_<suite>.npz   (<tag>/ 하위 폴더)
   03_correlation/        correlation.csv
   04_counterfactual/     counterfactual_<suite>.csv
   05_plots/              fig_*_<suite>.png
   06_image_ablation/     image_ablation_<suite>.csv, examples/
   07_dump_model_input/   input_*.png
-  setup_04_verify/       verify_render.png
-  setup_05_diag_render/  diag_render.png
+  09_embedding_substitution/  embed_sub_<suite>.csv, baselines_<suite>.pt, gates_<suite>.txt
+  10_icbench_rollout/    variants_<suite>.csv, rollouts_<suite>.csv, traj_<suite>.npz
+  setup_04_verify/  ·  setup_05_diag_render/
 ```
 
-경로 규약은 `vlamod/paths.py` 한 곳에 있습니다. 03·05·06 은 다른 스크립트의 출력을 새 위치에서 먼저 찾고,
-없으면 정리 전의 `outputs/<파일명>` 을 경고와 함께 읽습니다.
+경로 규약은 `vlamod/paths.py`. 03·05·06 은 다른 스크립트 출력을 새 위치에서 먼저 찾고, 없으면 옛 `outputs/<파일명>` 을 경고와 함께 읽습니다.
+**저장소 루트에서 실행하세요** (경로가 작업 디렉터리 기준).
 
 ---
 
-## Stage 0 — 노트북에서 로직 검증 (5분, GPU 불필요)
+## 0. 노트북에서 로직 검증 (5분, GPU 불필요)
 
 ```bash
 cd C:\Users\hello\PycharmProjects\VLA_Interpretability
-pip install torch pytest          # CPU 빌드로 충분
+pip install torch pytest numpy pandas pillow pyyaml
 pytest -q tests/test_core.py
 ```
 
-**Gate 0**: `34 passed` 가 나와야 합니다.
-
-여기서 검증되는 것: 지표 계산식, 질량 분해 합=1, KL 성질, knockout 마스킹 후 softmax 재정규화,
-프롬프트 오프셋 매핑, **device 인자 파싱**. **모델 없이 잡을 수 있는 실수는 여기서 다 잡힙니다.**
-
-실패하면 서버에 갈 필요가 없습니다. 실패한 테스트 이름을 그대로 알려주세요.
+**Gate**: `93 passed`. 지표 계산식, 질량 합 = 1, KL 성질, knockout 재정규화, 프롬프트 오프셋, 29871·Q 행, device 인자,
+이미지 변형, 경로 규약, 치환 hook·정렬 검사, ICBench 변형 규칙이 검증됩니다. 실패하면 서버에 갈 필요가 없습니다.
 
 ---
 
-## Stage 1 — 서버 환경 구축 (1~2시간, 대부분 다운로드 대기)
+## setup — 서버 환경 구축 (1~2시간, 대부분 다운로드 대기)
 
 ```bash
-# 저장소를 서버로 — 셋 중 하나
-#  (a) PyCharm: Tools → Deployment → Upload to...   ← .idea/deployment.xml 이 있으면 이 방식
-#  (b) rsync
-rsync -av --exclude '.git' --exclude '.idea' --exclude '__pycache__' \
-      ~/PycharmProjects/VLA_Interpretability/ user@server:~/VLA_Interpretability/
-#  (c) git push 후 서버에서 clone
-
-ssh user@server
-cd ~/VLA_Interpretability
-
-# 전송 누락 확인 — 이 파일이 없으면 01 스크립트가 ModuleNotFoundError 로 죽습니다
-ls vlamod/device.py
-
+# 저장소를 서버로 — git push 후 서버에서 git pull (권장) / rsync / PyCharm Deployment
+#  !! vlamod/ 를 스크립트와 **함께** 올리세요. 부분 동기화하면 AttributeError 가 납니다.
+cd ~/private/test/VLA_Interpretability
+export PIP_CONSTRAINT=$(pwd)/constraints.txt    # numpy<2 등 고정
 bash setup/01_env.sh              # conda env "vlamod" + torch + OpenVLA
 bash setup/02_libero.sh           # LIBERO + robosuite/MuJoCo
 conda activate vlamod
-# (MUJOCO_GL 등은 config 가 설정하므로 export 불필요. 설치 스크립트는 자체 export 함)
-
-# 체크포인트 (~15GB). 저장 위치는 configs/default.yaml 의 env.hf_home 이 정합니다.
-python setup/03_download_ckpt.py --suite spatial
+python setup/03_download_ckpt.py --suite spatial    # ~15GB, 위치는 configs/default.yaml 의 env.hf_home
+python setup/04_verify.py --gpu N                    # 상태 점검 (EGL 실렌더링 포함)
 ```
 
-> **환경변수는 `.bashrc` 가 아니라 `configs/default.yaml` 의 `env:` 섹션에서 관리합니다.**
-> 다운로드 스크립트와 분석 스크립트가 같은 값을 읽으므로, 경로가 바뀌면 그 한 줄만 고치면 됩니다.
-> 서버가 여러 대면 `configs/<서버명>.yaml` 로 복사해 두고 `--config` 로 고르세요 —
-> 재현할 때 "어떤 config 로 돌렸는지"만 남기면 됩니다.
->
-> ```yaml
-> env:
->   hf_home: "~/shared/hdd_ext/nvme1/kimhyeongwoo"
->   mujoco_gl: "egl"
->   pyopengl_platform: "egl"
-> ```
+> **환경변수는 `.bashrc` 가 아니라 `configs/default.yaml` 의 `env:` 섹션**에서 관리합니다.
+> 서버가 여러 대면 `configs/<서버명>.yaml` 로 복사해 `--config` 로 고르세요.
 
-**Gate 1** — 아래 셋이 모두 통과해야 합니다.
+**Gate**: `setup/04_verify.py` 전 항목 통과, `outputs/setup_04_verify/verify_render.png` 에서 로봇 팔이 똑바로 서 있음.
+실패하면 `05_diag_render.py`(렌더링) / `06_gpu_map.py`(GPU 번호) / `07_egl_probe.py`(EGL) / `08_diag_robosuite.py`(버전) 순으로 진단.
 
-```bash
-python -c "import torch; print(torch.cuda.device_count(), torch.cuda.get_device_name(0))"
-python -c "import transformers; print(transformers.__version__)" # 4.40.x
-python -c "from libero.libero import benchmark; print(list(benchmark.get_benchmark_dict().keys()))"
-nvidia-smi --query-gpu=index,name,memory.used,memory.total --format=csv   # 어느 GPU 가 비었는지
-```
-
-**여기서 쓸 GPU 번호를 정해 두세요.** 이후 모든 명령에 `--gpu N` 으로 넘깁니다.
-`nvidia-smi` 의 `memory.used` 가 낮은 번호를 고르시면 됩니다. OpenVLA-7B(bf16) 는
-가중치 약 16GB + attention 버퍼가 필요하므로 여유 20GB 이상을 권합니다.
-
-`01_env.sh` 안에 transformers 4.40 검사 `assert` 가 들어 있어서, 버전이 다르면 설치 단계에서 멈춥니다.
-
-### 여기서 자주 막히는 것
-
-| 증상 | 원인 / 조치 |
-|---|---|
-| `libero` import 시 EGL 에러 | `MUJOCO_GL=egl` 미설정. export 후 재시도 |
-| `libero_requirements.txt` 없음 | OpenVLA repo 구조 변경. `ls ~/third_party/openvla/experiments/robot/` 로 확인 |
-| 체크포인트 404 | HF repo 이름 변경 가능. huggingface.co/openvla 에서 실제 이름 확인 후 `setup/03_download_ckpt.py` 의 `CKPTS` 수정 |
-| conda 없음 | miniconda 설치 후 재시도. venv 로도 되지만 스크립트를 고쳐야 함 |
+고정 버전: torch 2.2.0+cu118, transformers 4.40.1, tokenizers 0.19.1, timm 0.9.10, numpy 1.26.4, robosuite 1.4.1, **mujoco 2.3.0**, python 3.10.
 
 ---
 
-## GPU 지정 (Stage 2 이후 모든 명령에 공통)
+## GPU 지정 (모델을 올리는 모든 스크립트 공통)
 
-모델을 올리는 **01 / 02 / 04** 만 아래 인자를 받습니다. **03 / 05 는 GPU 를 쓰지 않습니다.**
+GPU 사용: **01 · 02 · 04 · 06 · 07 · 08 · 09 · 10** 와 `setup/04`. **03 · 05 · `10 --dry-run` 은 GPU 불필요.**
 
 | 인자 | 예시 | 설명 |
 |---|---|---|
-| `--gpu N` | `--gpu 3` | 가장 간단. 3번 GPU 사용 |
-| `--device` | `--device cuda:3` · `--device 3` · `--device cpu` | 문자열 지정. `--gpu` 와 동시 사용 불가 |
-| `--model` | `--model openvla/openvla-7b-finetuned-libero-object` | 체크포인트 교체 |
-| `--unnorm-key` | `--unnorm-key libero_object` | action un-normalization key (02 / 04) |
-| `--tag` | `--tag object_ckpt` | 출력 파일명 접미사 (02 / 04) |
+| `--gpu N` | `--gpu 4` | 가장 간단 |
+| `--gpus` | `--gpus 0,6` | 여러 GPU 에 층 분할 로드 (**실서버 미검증**) |
+| `--device` | `--device cuda:4` · `--device cpu` | 문자열 지정 |
+| `--model` / `--unnorm-key` | `openvla/openvla-7b-finetuned-libero-object` / `libero_object` | 체크포인트 교체 |
+| `--tag` | `--tag chk_gpu0` | 출력 하위 폴더 (02·04·06·09·10) |
+| `--egl-device` | `--egl-device 0` | 렌더링 번호 (CUDA 번호와 **다른 체계**, 보통 0 하나) |
 
-생략하면 `configs/default.yaml` 의 `model.device` 를 씁니다.
-
-로드 직후 아래가 출력됩니다. **요청한 번호가 그대로 찍히는지 매번 확인하세요.**
+로드 직후 출력에서 **요청한 번호와 GPU 이름**을 확인하세요 (09 실제 로그):
 
 ```
-[device] model=cuda:3  render(EGL)=3
-[model ] openvla/openvla-7b-finetuned-libero-spatial  unnorm_key=libero_spatial
-[gpu   ] cuda:3 NVIDIA RTX A6000  사용가능 47.2GB / 전체 51.5GB
+[device] model=cuda:4  render(EGL)=egl:0  (EGL 디바이스가 1개뿐 → 선택 불가)
+[gpu   ] cuda:4 NVIDIA RTX A4000  이 프로세스 15.1GB  |  남은 여유 1.6GB / 전체 16.9GB
 ```
 
-### 멀티 GPU 서버의 함정 두 가지
-
-**① PyTorch 와 MuJoCo 는 GPU 를 따로 고릅니다.**
-모델을 `cuda:3` 에 올려도 LIBERO 의 EGL 렌더링은 기본적으로 0번을 씁니다.
-0번이 남의 작업으로 꽉 차 있으면 **모델은 멀쩡한데 렌더링만 죽는** 에러가 납니다.
-`--gpu` 를 쓰면 `MUJOCO_EGL_DEVICE_ID` 를 같은 번호로 맞춰 주므로 이 문제가 사라집니다.
-출력의 `render(EGL)=` 이 `model=` 과 같은 번호인지 확인하세요.
-
-**② `CUDA_VISIBLE_DEVICES` 와 섞어 쓰지 마세요.**
-섞으면 번호가 0부터 재매핑됩니다 — `CUDA_VISIBLE_DEVICES=3` 상태의 `--gpu 3` 은
-존재하지 않는 GPU 입니다. 코드가 이 상황을 감지해 에러를 냅니다. 한 방식만 쓰세요.
+- **궤적은 GPU 종류에 따라 달라집니다** (bf16 반올림·SM 수에 따른 커널 차이). 같은 GPU 재실행은 완전 재현.
+  → 서로 비교할 실험(예: 04 ↔ 06, 02 ↔ 09)은 **같은 종류 GPU** 로. 실측: GPU 0(A4000) 13/15 vs GPU 5(A6000) 10/15.
+- 실측 확인된 매핑: cuda:0 = A4000, cuda:4 = A4000, cuda:5 = A6000. 나머지는 `nvidia-smi --query-gpu=index,name --format=csv`.
+- A4000(16GB) 단독 로드 가능하나 여유 약 1.6GB → 긴 롤아웃에서 OOM 위험 (경고가 뜸).
+- `CUDA_VISIBLE_DEVICES` 와 `--gpu` 를 섞지 마세요 (번호 재매핑, 코드가 감지해 에러).
 
 ---
 
-## Stage 2 ★ — 스모크 테스트 (30분, 이 프로젝트의 관문)
+## 01 ★ — 구조 검증 (30분, 이 프로젝트의 관문)
 
 ```bash
-python scripts/01_smoke_forward.py --gpu 0                        # 합성 이미지, 구조만 검증
-python scripts/01_smoke_forward.py --gpu 0 --libero --suite spatial --task-id 0
+python scripts/01_smoke_forward.py --gpu 4                        # 합성 이미지
+python scripts/01_smoke_forward.py --gpu 4 --libero --suite spatial --task-id 0
 ```
 
-스크립트가 7단계를 순서대로 출력합니다. **각 단계의 통과 기준**은 이렇습니다.
+| 단계 | 통과 기준 | 실패 시 |
+|---|---|---|
+| `[1]` 모델 로딩 | layers 32, heads 32 | `find_language_model` 확인 |
+| `[2]` 프롬프트 | instruction 문자 구간이 지시문을 정확히 가리킴 | `token_index.PROMPT_TEMPLATE` |
+| `[3]` visual span | `[1, 257)` → 256 | 경고를 무시하지 말고 구조 확인 |
+| `[4]` 구간 분해 | **★ 육안: L 이 지시문 내용어에만**, 마지막 텍스트 토큰이 `▁`(29871), A·Q 범위 출력 | `In`·`What` 에 L → 오프셋 매핑 실패 |
+| `[5]` action token | 7개 id, 범위 검증 통과 | `action_bin_token_ids` ±1 |
+| `[6]` 캡처 | attn `(32, 32, 7, T)`, **Q 행 argmax == 생성 토큰 7/7**, 행 합 ≈ 1 (bf16 0.997–1.003) | 7/7 이 아니면 Q 위치가 틀린 것 |
+| `[7]` 지표 | R 3종이 [0,1], NaN 없음 | mass_sink ≥ 0.9 면 sink 처리 재검토 |
 
-| 단계 | 출력 | 통과 기준 | 실패 시 |
-|---|---|---|---|
-| `[1]` 모델 로딩 | layers, heads, vocab_size | layers=32, heads=32 (Llama-2-7B) | 백본 탐색 실패 → `find_language_model` 확인 |
-| `[2]` 프롬프트 | 프롬프트 문자열 + instruction 문자 구간 | 구간이 지시문을 정확히 가리킴 | `token_index.PROMPT_TEMPLATE` 을 실제 체크포인트 템플릿으로 수정 |
-| `[3]` visual span 실측 | `[1, 257) → n_visual = 256` | **start=1, n_visual=256 이면 이상적**. 다르면 경고가 뜨지만 진행은 됨 | 경고를 무시하지 말고 모델 구조를 확인. 숫자 자체는 코드가 알아서 씀 |
-| `[4]` 구간 분해 | 토큰별 S/L/T 태그 | **★ 육안 검증. L 이 instruction 내용어에만** | `In`, `What`, `action` 에 L → 오프셋 매핑 실패 |
-| `[5]` action token | 7개 id + bin 범위 | `범위 검증: 통과` | `action_bin_token_ids` 의 오프셋을 ±1 조정 |
-| `[6]` 캡처 | attn/vnorm/logits shape | attn = `(32, 32, 7, T)`, **행 합 min/max 모두 1.0000** | 행 합이 1이 아니면 attention 캡처가 잘못된 것 |
-| `[7]` 지표 | R_raw / R_norm / R_vnorm + baseline | 셋 다 `[0, 1]` 안, NaN 없음 | mass_sink 가 0.9 이상이면 sink 처리 재검토 |
+**Gate**: 위 전부 + `--libero` 실행 시 `outputs/01_smoke_forward/smoke_libero_view.png` 에서 로봇 팔이 똑바로 서 있음.
 
-**Gate 2**:
-1. `[5] 범위 검증: 통과`
-2. `[6] attention 행 합`이 1.0000
-3. `[4]` 육안 검증 통과 — **이건 자동화 불가, 직접 보셔야 합니다**
-4. `--libero` 실행 시 `outputs/01_smoke_forward/smoke_libero_view.png` 를 열어 **로봇 팔이 똑바로 서 있는지** 확인
-   (뒤집혀 있으면 `env_libero.obs_to_image(flip=False)` 로 바꾸고 다시)
-
-### `[4]` 육안 검증 예시
+`[4]` 실측 예 (spatial task 0, 시퀀스 298):
 
 ```
   [   0]        S  '<s>'
   [   1..256]   V  (visual ×256)
-  [ 257]        T  '▁In'
-  [ 258]        T  ':'
-  ...
-  [ 268]        L  '▁pick'      ← 여기부터
-  [ 269]        L  '▁up'
-  [ 270]        L  '▁the'
-  [ 271]        L  '▁black'
-  [ 272]        L  '▁bowl'      ← 여기까지가 L
-  [ 273]        T  '?'
-  [ 274]        T  '▁Out'
+  [ 257..265]   T  '▁In' ':' '▁What' … '▁to'
+  [ 266]        L  '▁pick'          ← 여기부터
+  …
+  [ 285]        L  '▁plate'         ← 여기까지 L (20개)
+  [ 286..289]   T  '?' … '▁Out' ':'
+  [ 290]        T  '▁'  (29871)     ← Q 시작
+  A = 291–297,  Q = 290–296
 ```
-
-이 모양이 아니면 뒤의 숫자는 전부 의미가 없습니다.
 
 ---
 
-## Stage 3 — 데이터 수집 (1~3시간)
+## 08 ★ — 정책 성공 1회 확인
 
 ```bash
-# 먼저 작게 돌려 시간을 재세요
-python scripts/02_run_analysis.py --gpu 0 --suite spatial --tasks 0 --episodes 1 --max-steps 20 --stride 5
-
-# 문제 없으면 본 실행
-python scripts/02_run_analysis.py --gpu 0 --suite spatial --tasks 0 1 2 3 4 --episodes 3 --max-steps 40 --stride 5
+python scripts/08_policy_sanity.py --gpu 4 --tasks 0 --max-steps 220 --gripper-fix both
 ```
 
-### GPU 가 여러 장이면 체크포인트를 병렬로
+**Gate**: `current + grip` 조합이 성공. 실패하면 분석을 돌리지 마세요 — 성공률은 전처리·후처리 오류를 잡는 **유일한 경험적 검증**입니다
+(그리퍼 규약 사례는 아래 트러블슈팅).
 
-한 체크포인트 결과만으로는 "그 모델 얘기 아니냐"를 막을 수 없습니다.
-**최소 2개 체크포인트**에서 같은 성질이 나오는지 확인해 두면, 나중에 실물(UR5e)로
-넘어갈 때 전이를 주장하는 근거가 됩니다. `--tag` 로 출력 파일명이 갈립니다.
+---
+
+## 02 — 롤아웃 + R + knockout KL
 
 ```bash
-python scripts/02_run_analysis.py --gpu 0 --suite spatial \
-       --model openvla/openvla-7b-finetuned-libero-spatial \
-       --unnorm-key libero_spatial --tag spatial_ckpt &
-python scripts/02_run_analysis.py --gpu 1 --suite object \
-       --model openvla/openvla-7b-finetuned-libero-object \
-       --unnorm-key libero_object --tag object_ckpt &
-wait
-# → outputs/02_run_analysis/spatial_ckpt/analysis_spatial_spatial_ckpt.csv
-#   outputs/02_run_analysis/object_ckpt/analysis_object_object_ckpt.csv
+python scripts/02_run_analysis.py --gpu 4 --suite spatial --tasks 0 --episodes 1 --max-steps 20 --stride 5   # 시간 측정
+python scripts/02_run_analysis.py --gpu 4 --suite spatial --tasks 0 1 2 3 4 --episodes 3 --max-steps 220 --stride 5
+python scripts/02_run_analysis.py --gpu 4 --suite spatial --tasks 7 9 --episodes 3 --max-steps 220 --stride 5 --tag lang_required
 ```
-
-### 파라미터가 무엇을 정하는가
 
 | 인자 | 의미 | 권장 |
 |---|---|---|
-| `--tasks` | 분석할 task id | 최소 5개 (일반화 주장의 최소선) |
-| `--episodes` | task 당 에피소드 | 3 이상 (분산 보고용) |
-| `--max-steps` | 에피소드 최대 길이 | 40 (LIBERO 성공 궤적 대부분 커버) |
-| `--stride` | 몇 스텝마다 분석 | 5. 1로 하면 5배 느림 |
-| `--no-intervene` | 개입 생략 | **쓰지 마세요.** 관찰만으로는 결론 못 냄 |
+| `--tasks` | task id | 0–4 + **언어 필수 쌍 7·9** (원인 판별용) |
+| `--episodes` | task 당 초기 상태 수 | 3 이상 |
+| `--max-steps` | 에피소드 최대 길이 | **220** (OpenVLA LIBERO-spatial 평가 기준) |
+| `--stride` | 몇 스텝마다 분석 | 5 |
+| `--no-intervene` | 개입 생략 | 쓰지 마세요 |
 
-### 소요시간 추정 (측정값 아님 — 직접 재세요)
+- 분석 1스텝 = generate 1 + teacher-forced forward 4 (base + knockout 3) + 정책 행동 1. **소요 시간은 직접 재세요.**
+- 끝에 **성공률**이 출력됩니다. 실측 13/15(A4000), 10/15(A6000).
 
-분석 1스텝 = generate 1회 + teacher-forced forward 4회(무개입 + knockout 3종).
-A6000 bf16 + **eager attention**(flash 보다 느림) 기준 대략 **2~4초/스텝**으로 예상합니다.
-위 본 실행 설정이면 분석 대상 스텝 = 5 task × 3 ep × 8 스텝 = 120개 → **10~30분** 수준.
-여기에 환경을 굴리는 rollout forward 가 더해집니다.
-
-> **정확한 숫자는 제가 모릅니다.** 실제 모델을 못 돌려봤습니다. 작은 설정으로 먼저 재보세요.
-
-### 진행 중 화면에서 볼 것
-
-```
-  t=  0 R_raw=0.0421 R_norm=0.4832 R_vn=0.3910 | KL_L=0.0031 KL_V=2.8740 KL_ctrl=0.0028
-```
-
-- `KL_V >> KL_L` : 예상되는 결과. 비전이 인과적으로 지배적
-- **`KL_L ≈ KL_ctrl`** : 언어 차단이 랜덤 토큰 차단과 구별 안 됨 → 가장 강한 형태의 "언어 무시" 증거
-- `R_raw` 가 `uniform_baseline`(마지막 요약에 출력) 근처 : attention 이 언어에 특별히 안 쏠림
-
-**Gate 3**: CSV 가 생기고, `R_*` 에 NaN 이 없고, `KL_*` 이 모두 유한한 양수.
+**Gate**: CSV 생성, `R_*` NaN 없음, `KL_*` 유한, `KL_lang_knockout > KL_control_knockout` 가 거의 모든 행.
+⚠ knockout 은 **직접 효과**만 잽니다 (`docs/05_interventions.md` [L3], 09 와 비교).
 
 ---
 
-## Stage 4 — H2 검정 (1분)
+## 03 — H2 상관 (GPU 불필요)
 
 ```bash
-python scripts/03_correlation.py   # GPU 불필요. 기본 입력 outputs/02_run_analysis/analysis_spatial.csv
+python scripts/03_correlation.py      # 기본 입력 outputs/02_run_analysis/analysis_spatial.csv
+python scripts/03_correlation.py --csv outputs/02_run_analysis/lang_required/analysis_spatial_lang_required.csv \
+                                 --out outputs/03_correlation/correlation_lang_required.csv
 ```
 
-**질문**: attention 비율이 인과 기여를 예측하는가?
-
-| 결과 | 해석 | 논문에서의 쓸모 |
-|---|---|---|
-| `\|ρ\| < 0.3` | attention 비율은 인과 기여를 거의 예측 못 함 → **H2 지지** | 2605.00321 의 "attention 비판"을 정량 확인. IVAR 류 지표 전반에 경고 |
-| `\|ρ\| > 0.6` | attention 비율이 쓸 만한 proxy → **H2 기각** | 기존 attention 연구를 **방어**해 주는 결과. 이것도 기여 |
-| 0.3~0.6 | 조건부 | 층/head 별로 나눠 다시 |
-
-같이 출력되는 **대조군 검정**이 더 중요할 수 있습니다:
-
-```
-[대조군 검정] lang_vs_control 평균=1.08, H0(=1) 대비 t=0.72, p=0.47
-```
-
-`p` 가 크면 → 언어 토큰 차단이 같은 개수의 랜덤 visual 토큰 차단과 **통계적으로 구별되지 않음**.
-"VLA 가 언어를 안 쓴다"의 가장 엄밀한 형태입니다.
+- `|ρ| < 0.3` 이면 attention 비율은 인과를 거의 예측 못 함, `> 0.6` 이면 쓸 만한 대리지표.
+- ⚠ 행은 에피소드 안에서 자기상관 → 출력 p 값은 과대. **에피소드 단위 bootstrap** 으로 다시 계산해야 함.
+- ⚠ 마지막의 `lang_vs_control` t-검정은 분모 ≈ 0 문제와 자기상관 때문에 **쓰지 마세요** (교체 예정).
+- ⚠ 비율 대 비율(R ↔ causal_ratio) 결론은 개입 방식에 따라 부호가 바뀜(09). **R ↔ KL_L** 을 함께 보고.
 
 ---
 
-## Stage 5 — H1 검정 (1~2시간 + 사람 손 필요)
-
-### 5-a. 먼저 모호 장면 task 를 골라야 합니다 ← **자동화 불가**
+## 04 — 지시 조건 (H1 일부)
 
 ```bash
-# 각 task 의 지시문과 첫 프레임을 뽑아 눈으로 확인
-python scripts/01_smoke_forward.py --gpu 0 --libero --suite object --task-id 0
-# outputs/01_smoke_forward/smoke_libero_view.png 를 열어본다. task-id 를 바꿔가며 반복
+python scripts/04_counterfactual.py --gpu 4 --suite spatial --tasks 0 1 2 3 4 7 9 --ambiguous-tasks 7 9
 ```
-
-**고르는 기준**: 지시문이 지목하는 물체와 **혼동될 수 있는 후보가 장면에 둘 이상** 있을 것.
-예) "pick up the *black* bowl" 인데 장면에 흰 그릇도 있는 경우 → 색을 안 읽으면 틀림.
-후보가 하나뿐이면 언어를 안 봐도 정답이라 **아무것도 측정되지 않습니다.**
-
-`libero_object` suite 가 가장 후보가 많습니다. 3~5개를 고르세요.
-
-### 5-b. 실행
-
-```bash
-python scripts/04_counterfactual.py --gpu 0 --suite object \
-       --tasks 0 1 2 3 4 5 --episodes 2 \
-       --ambiguous-tasks 1 3 5          # ← 5-a 에서 고른 id
-```
-
-### 4개 조건이 각각 무엇을 묻는가
 
 | 조건 | 지시문 | 묻는 것 |
 |---|---|---|
-| `valid` | 원래 지시 | 기준선 |
-| `paraphrase` | 동의어 치환 ("pick up"→"grasp") | 의미가 같으면 행동도 같아야 함. 다르면 **표면 형태에 과적합** |
-| `swapped` | 같은 suite 의 **다른 task 지시** | 지시가 바뀌었는데 행동이 그대로면 **언어 무시** |
-| `empty` | 빈 지시 | 2510.13626 재현. 단 **OOD 라 해석 주의** |
+| `valid` | 원문 | 기준 |
+| `paraphrase` | "pick up" → "grasp" 등 | 의미가 같으면 행동도 같아야 함 |
+| `swapped` | 같은 suite 의 다른 task 지시 | 바뀌었는데 행동이 그대로면 언어 무시 |
+| `empty` | 빈 지시 | LIBERO-Plus 재현 (OOD, R 은 NaN) |
 
-### 읽는 법
+- 모든 조건이 valid 의 action 토큰으로 teacher-forcing (`--prefix-mode shared`) → 02 와 같은 규약.
+- **`--ambiguous-tasks 7 9`**: spatial 에서 배치가 같고 목표만 반대인 쌍 — 이미지로 과제를 구분할 수 없어 **언어 필수**.
+  예전 문서의 "object suite 에서 손으로 고르기"는 이것으로 대체.
+- ⚠ swapped 는 장면마다 성격이 다름 (task 0: 방해 그릇을 가리키는 실행 가능한 명령 / task 1–4: 그릇이 없는 위치). 해석 시 구분.
 
-```
-모순 지시에서 7 DoF 가 전부 그대로인 비율: 78.3%
-```
-→ 지시를 바꿔도 78%의 경우 완전히 같은 행동. linguistic blindness 재현.
-
-```
-R_norm(valid) - R_norm(swapped) = +0.0021
-```
-→ 비율이 지시 내용에 거의 반응 안 함. **H1 지지**.
-
-```
---- 모호 장면 vs 비모호 장면 ---
-ambiguous  condition    R_norm   KL_vs_valid
-False      swapped      0.4831   0.0042
-True       swapped      0.4855   0.0051
-```
-→ 모호 장면에서도 `R_norm` 이 안 올라감. **H1 의 핵심 증거**.
-언어가 반드시 필요한 상황인데도 비율이 그대로라는 뜻입니다.
-
-**Gate 5**: `--ambiguous-tasks` 를 **반드시** 지정할 것. 없으면 스크립트가 경고를 출력하고,
-그 상태의 결과로는 "LIBERO 탓 아니냐"는 반박을 막을 수 없습니다.
+**실측 (task 0–4, A4000)**: swapped KL 4.97 vs paraphrase 0.29 (30/30 장면), empty 8.31, **R_norm 변화 +0.004** —
+행동은 지시 내용에 반응하는데 비율은 불변.
 
 ---
 
-## Stage 6 — 그림 (1분)
+## 05 — 그림 (GPU 불필요)
 
 ```bash
-python scripts/05_plots.py --suite spatial     # GPU 불필요
-python scripts/05_plots.py --suite object      # counterfactual 그림
+python scripts/05_plots.py --suite spatial
 ```
 
-| 파일 | 내용 | 발표에서의 역할 |
-|---|---|---|
-| `fig_layerwise_*.png` | 층별 R 3종 + uniform baseline | "어느 층에서 언어를 보는가" |
-| `fig_h2_*.png` | R_norm vs causal_ratio 산점도 (ρ 표기) | **H2 핵심 슬라이드** |
-| `fig_cf_ratio_*.png` | 조건별 R_norm 막대 | **H1 핵심 슬라이드** |
-| `fig_cf_kl_*.png` | 조건별 KL 막대 | H1 보조 |
+| 파일 | 내용 |
+|---|---|
+| `fig_layerwise_*.png` | 층별 R 3종 + uniform baseline |
+| `fig_h2_*.png` | R_norm vs causal_ratio 산점도 (knockout 기준) |
+| `fig_cf_ratio_*.png` / `fig_cf_kl_*.png` | 04 조건별 R_norm / KL |
+
+`--tag` 를 받지 않습니다 (기본 출력만 그림).
 
 ---
 
-## 2주 스프린트 배치
+## 06 — 이미지 조건
 
-| 일차 | 할 일 | 산출물 |
+```bash
+python scripts/06_image_ablation.py --gpu 4 --suite spatial --tasks 0 1 2 3 4 --episodes 2   # 04 와 같은 GPU 종류
+```
+
+- 조건: `valid` / `other_scene`(다음 task 의 같은 ep·t 장면) / `hflip` / `patch_shuffle`(32×32) / `noise`. 지시문은 항상 원문.
+- 진행: 롤아웃으로 `--steps`(10 25 40) 시점 이미지 수집 → 조건별 분석. 예시 PNG(`examples/`)로 변형이 의도대로인지 육안 확인.
+- 실측: other_scene 11.69, hflip 5.69, patch_shuffle 9.61, noise 10.13 / R_raw 0.39 → 0.475(patch_shuffle), 0.525(noise).
+- ⚠ R_raw 상승은 Text 질량 증가인지 Vision 질량 감소인지 **구분 불가**(절대 질량 미기록). 보상 가설(이미지가 망가지면 KL_L 이 커지는가)은 보완 후 검정.
+- ⚠ other_scene 은 로봇 자세도 함께 바뀜.
+
+---
+
+## 07 — 모델 입력 확인 (필요할 때만)
+
+```bash
+python scripts/07_dump_model_input.py --gpu 4 --libero --suite spatial --task-id 0
+```
+
+확인: `input_00`(processor 이전)과 `input_01/02`(백본별)의 구도 동일, 224×224 종횡비 유지, 색 치우침 없음, 채널 6(DINOv2 + SigLIP).
+**좌우 반전은 못 잡습니다** → 성공률로 판단.
+
+---
+
+## 09 — 0층 평균 치환(총 효과) vs knockout(직접 효과)
+
+```bash
+python scripts/09_embedding_substitution.py --gpu 4 --suite spatial --tasks 0 1 2 3 4 --episodes 3
+#   --no-rescaled / --no-segments 로 forward 절약, --stride 20 으로 프레임 축소
+```
+
+- 한 프레임당 forward 최대 12회 (02 한 행의 약 3배). 약 185 프레임.
+- **Gate (스크립트가 자동 판정)**: G1 정렬(매 프레임, 실패 시 중단) · G2 항등 치환 KL ≈ 0(실패 시 중단) · G3 재실행 KL(기록) · G4 L 치환 > 대조군 비율(50% 미만 경고).
+- 해석 규칙(결과 전에 고정): `docs/05_interventions.md` [L2].
+- 실측: 치환/knockout 비 L 1.17 [1.09, 1.23], **V 1.58** [1.46, 1.81] → knockout 은 이미지 의존을 과소평가.
+  R_raw ↔ causal_ratio 상관이 knockout +0.35 / 치환 −0.17 로 **부호 반전**.
+
+---
+
+## 10 — ICBench 방식 모순 지시 롤아웃 (1단계: 편향의 존재)
+
+```bash
+python scripts/10_icbench_rollout.py --dry-run --tasks 0 1 2 3 4 7 9            # 지시문 표만 (GPU 불필요) → 검토
+python scripts/10_icbench_rollout.py --gpu 4 --tasks 0 7 9 --inits 10            # 파일럿: 3 × 7변형 × 10 = 210 롤아웃
+python scripts/10_icbench_rollout.py --gpu 4 --tasks 0 1 2 3 4 7 9 --inits 20    # 본 실행 (파일럿 후 결정)
+```
+
+- 변형: normal / V1 blue bowl / V2 green plate / V3 둘 다 / V4 under the plate / V5 그릇 없는 위치 / **R 방해 그릇 위치(실행 가능한 다른 명령)**.
+- 채점은 전부 원래 bddl 성공 판정 → 변형에서 성공 = **가짜 성공**. 결과 범주 target / distractor / wrong_lift / abstain, 갈라진 스텝 `t_star`.
+- task 하나 끝날 때마다 CSV·npz 저장 (중간에 죽어도 남음).
+- **Gate**: 정상 지시로 성공한 초기 상태에서 **실제 실패(target 이외)가 10개 이상** — 미달이면 11 의 예측 비교는 표본 부족 경고가 뜹니다.
+- 볼 것: R 에서 `distractor`(지시를 따름) 비율. **task 7·9 에서 따르는지**가 원인 판별(데이터 지름길 vs 구조)의 첫 데이터.
+
+## 11 — (예정) 가짜 성공 예측
+
+10 이 저장한 행동을 시뮬레이터에서 재생해 프레임 복원(MuJoCo 결정성 → GPU 무관) → 같은 프레임에 정상·모순 지시 →
+R·KL·바뀐 단어 토큰 attention 으로 가짜 성공 vs 실제 실패 예측 (AUC, 에피소드 bootstrap). 재생이 원 궤적과 일치하는지부터 검사.
+
+---
+
+## 진행 순서 (연구 단계와 대응)
+
+| 순서 | 할 일 | 단계 |
 |---|---|---|
-| 1 | Stage 0 + Stage 1 (+ 쓸 GPU 번호 확정) | 환경 완성 |
-| 2~3 | **Stage 2** (여기서 대부분의 시간이 갑니다) | 구조 검증 통과 |
-| 4 | Stage 3 소규모 → 시간 측정 → 규모 확정 | 파라미터 확정 |
-| 5~6 | Stage 3 본 실행 | `analysis_spatial.csv` |
-| 7 | Stage 4 | **H2 1차 결과** |
-| 8~9 | Stage 5-a (모호 task 선정) | task id 목록 |
-| 10~11 | Stage 5-b | `counterfactual_object.csv` |
-| 12 | Stage 6 + 결과 정리 | 그림 4장 |
-| 13~14 | 추가 suite / seed 확장, 분산 보고 | 재현성 확보 |
-
-**14일 차의 목표 문장** — 이 한 줄이면 교수님 미팅에 충분합니다:
-
-> "attention 비율은 X 였는데 인과 기여 비율은 Y 였고, 둘의 Spearman 상관은 ρ=Z 였습니다.
-> 그리고 언어가 반드시 필요한 모호 장면에서도 비율이 유의하게 변하지 않았습니다."
+| 1 | pytest → setup → **01** → **08** | 전제 |
+| 2 | **10 파일럿** (`--tasks 0 7 9`) | 1. 존재 |
+| 3 | 02·09 를 `--tasks 7 9` 로 (task 0–4 결과와 비교) | 3. 원인 (판별) |
+| 4 | 06 보완(절대 질량 + KL) → 보상 가설 | 3. 원인 |
+| 5 | 11 구현·실행 | 2. 측정 |
+| 6 | 층·단어 단위 분석 → 추론 시 개입 → 10 재측정 | 3·4 |
 
 ---
 
@@ -414,7 +329,7 @@ python scripts/05_plots.py --suite object      # counterfactual 그림
 | `4D attention mask 를 기대했는데 ND` | transformers 버전 | 4.40.x 로 내리거나, 해당 버전의 `LlamaDecoderLayer.forward` 시그니처 확인 |
 | `언어 구간 L 이 비었습니다` | 프롬프트 템플릿 불일치 | `token_index.PROMPT_TEMPLATE` 수정 |
 | `visual 구간이 연속적이지 않습니다` | 모델 구조 가정 위반 | `probe_visual_span` 출력의 changed 인덱스를 직접 보기 |
-| `action 위치가 시퀀스 길이를 벗어납니다` | visual 삽입 위치 가정 오류 | Stage 2 `[3]` 재확인 |
+| `action 위치가 시퀀스 길이를 벗어납니다` | visual 삽입 위치 가정 오류 | 01 의 `[3]` 재확인 |
 | `범위 검증: 실패` | action bin 오프셋 ±1 | `action_bin_token_ids` 의 `v - n_bins`, `v` 를 조정 |
 | CUDA OOM | 48GB 면 안 날 텐데 | 다른 프로세스 확인. `nvidia-smi` |
 | `n_identical_dof` 가 항상 7 | 정상일 수 있음 (언어 무시) | 단, `valid` 조건에서도 7이면 캡처가 잘못된 것 |
@@ -428,11 +343,17 @@ python scripts/05_plots.py --suite object      # counterfactual 그림
 | 렌더링 중 `get_joint_qpos_addr` 에서 메시지 없는 `AssertionError` | mujoco 3.x 가 robosuite 1.4.1 과 비호환 (enum 비교 방식 변경) | `mujoco==2.3.0` 고정 (`constraints.txt`) |
 | `The size of tensor a (291) must match ... (290)` | `predict_action` 이 입력 끝에 토큰 29871 을 덧붙이는데 `attention_mask` 는 붙이기 전 길이 | `attention_mask` 를 빼고 호출 (`pipeline.policy_action`) |
 | **LIBERO 성공률 0%** (팔은 움직이는데 못 집음) | **그리퍼 규약 불일치.** 아래 사례 참고 | `pipeline.libero_env_action` 으로 변환 (`policy_action` 기본 적용). 확인: `scripts/08_policy_sanity.py` |
-
+| 02 성공률이 이전 실행과 다름 (예: 13/15 → 10/15) | **GPU 종류가 다르면 궤적이 달라짐** (bf16 반올림·SM 수에 따른 cuBLAS 커널) | 비교할 실험은 같은 종류 GPU 로. 같은 GPU 재실행은 완전 재현됨 |
+| `AttributeError: ... append_action_prefix` 등 | 스크립트만 새 버전, `vlamod/` 는 옛 버전 (부분 동기화) | `vlamod/` 전체를 함께 동기화 |
+| 01 종료 시 `EGLError: EGL_NOT_INITIALIZED (eglDestroyContext)` | env 를 닫지 않고 종료 | `task.env.close()` (01 에 반영됨, 결과에는 무해) |
+| 04 `언어 구간 L 이 비었습니다` (empty 조건) | 빈 지시문은 L 이 비는 게 정상 | `allow_empty_language` (반영됨, empty 의 R 은 NaN) |
+| 09 `[G1] 텍스트 위치 ... 0층 입력이 임베딩과 다릅니다` | visual 삽입 위치 가정 위반 | 01 의 `[3]` visual span 재확인 |
+| 09 `[G2] 원래 임베딩으로 '치환' 했는데 출력이 바뀌었습니다` | hook 구현 / transformers 버전 | 4.40.1 인지, `LlamaDecoderLayer` 가 hidden_states 를 위치 인자로 받는지 확인 |
+| 10 `task N 지시문 ... 이 장면 표 ... 와 다릅니다` | LIBERO 버전의 지시문이 `icbench.SPATIAL_SCENES` 와 다름 | bddl 과 표를 대조해 수정 |
 
 ### 사례: LIBERO 성공률 0% — 그리퍼 규약 불일치 (2026-09-29 해결)
 
-**증상.** Stage 3 본 실험(5 task × 3 ep)과 `max_steps=400` 재시도 모두 성공률 0%.
+**증상.** 02 본 실행(5 task × 3 ep)과 `max_steps=400` 재시도 모두 성공률 0%.
 팔은 물체 쪽으로 움직이지만 집지 못함. 에러 메시지는 없음.
 
 **배제한 원인.** `unnorm_key` — `norm_stats` 키가 `libero_spatial` 하나뿐이라 맞음.
@@ -481,16 +402,10 @@ attention 캡처(teacher-forced)는 이 변환과 무관 — **바뀌는 것은 
 
 ---
 
-## 결과가 "재미없게" 나오는 경우
 
-이 연구는 **음성 결과도 결과입니다.** 아래 셋 중 무엇이 나와도 발표할 것이 있습니다.
+## 결과 해석의 원칙
 
-| 나온 결과 | 이야기 |
-|---|---|
-| 언어를 거의 안 쓴다 (예상) | 선행연구 재현 + **비율이 demand 에 반응 안 함**(H1)이라는 더 구체적 진술 |
-| 언어를 생각보다 많이 쓴다 | 선행연구와 불일치 → 어떤 조건에서 갈리는지가 새 질문. 2510.13626 vs 2601.04052 의 불일치와 연결 |
-| attention 비율과 인과 기여가 무관 | **H2 지지.** IVAR 류 지표 기반 후속 연구 전체에 대한 경고 |
-| attention 비율과 인과 기여가 잘 맞음 | H2 기각. attention 지표를 정당화 — 이것도 기여 |
-
-가장 위험한 것은 결과가 아니라 **"그래서 뭐(so what)"에 답을 준비 안 하는 것**입니다.
-계획서 §6 의 방어 문장을 미리 외워 두세요.
+- **음성 결과도 결과입니다.** 편향이 없으면 "왜 OpenVLA 는 따르고 OFT·π0 는 무시하는가"로, attention 지표가 예측에 실패하면 "IVAR 류로는 진단 불가"로.
+- **결과를 보고 지표를 고르지 마세요.** 개입 방식별(knockout·치환) 결과를 모두 보고하고, 해석 규칙은 실행 전에 `docs/05_interventions.md` 에 적습니다.
+- **독립 단위는 에피소드입니다.** 행 단위 p 값은 과대 — 에피소드 bootstrap, 에피소드 내 상관을 함께.
+- 가장 위험한 것은 결과가 아니라 **"그래서 뭐(so what)"** 에 답이 없는 것. `docs/00_research_plan.md` §7.

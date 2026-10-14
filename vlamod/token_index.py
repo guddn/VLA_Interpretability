@@ -1,4 +1,4 @@
-"""Phase 1: 토큰 구간 인덱싱.
+"""토큰 구간 인덱싱.
 
 이 파일이 틀리면 그 뒤의 모든 숫자가 무의미해집니다. 그래서 전부 **실측 + 검증** 합니다.
 
@@ -281,7 +281,7 @@ def build_spans(
 
 
 def pretty_print_spans(spans: TokenSpans, max_show: int = 40) -> str:
-    """사람이 눈으로 검증하기 위한 출력. Phase 1 에서 반드시 확인하세요."""
+    """사람이 눈으로 검증하기 위한 출력. 01 실행 시 반드시 확인하세요."""
     lines = [spans.summary(), ""]
     lset = set(spans.language)
     tset = set(spans.template)
