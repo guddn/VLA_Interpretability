@@ -628,3 +628,141 @@ def test_find_input_prefers_new_then_legacy(tmp_path, monkeypatch, capsys):
     os.makedirs(os.path.dirname(new))
     open(new, "w").close()
     assert OP.find_input(OP.COUNTERFACTUAL, "counterfactual_spatial.csv") == new  # 새 위치 우선
+
+
+# ---------------------------------------------------------------- [L2] 임베딩 치환 (09)
+from vlamod import substitute as SB  # noqa: E402
+
+
+def test_replace_positions_only_targets_and_copies():
+    h = torch.arange(2 * 5 * 3, dtype=torch.float32).reshape(2, 5, 3)
+    vec = torch.full((2, 3), -1.0)
+    out = SB.replace_positions(h, [1, 3], vec)
+    assert torch.equal(out[:, [1, 3]], torch.full((2, 2, 3), -1.0))      # 배치 전체에 적용
+    assert torch.equal(out[:, [0, 2, 4]], h[:, [0, 2, 4]])               # 나머지 불변
+    assert not torch.equal(h[:, 1], out[:, 1])                           # 원본은 안 바뀜
+
+
+def test_replace_positions_rejects_bad_shape_and_range():
+    h = torch.zeros(1, 4, 3)
+    with pytest.raises(ValueError):
+        SB.replace_positions(h, [0, 1], torch.zeros(3, 3))
+    with pytest.raises(IndexError):
+        SB.replace_positions(h, [4], torch.zeros(1, 3))
+
+
+def test_replace_positions_keeps_dtype():
+    h = torch.zeros(1, 4, 3, dtype=torch.bfloat16)
+    out = SB.replace_positions(h, [2], torch.ones(1, 3))
+    assert out.dtype == torch.bfloat16 and float(out[0, 2, 0]) == 1.0
+
+
+def test_rescale_to_norm():
+    v = torch.tensor([[3.0, 4.0], [0.0, 2.0]])
+    r = SB.rescale_to_norm(v, 10.0)
+    assert torch.allclose(r.norm(dim=-1), torch.tensor([10.0, 10.0]))
+    assert torch.allclose(r[0] / r[0].norm(), v[0] / v[0].norm())         # 방향 유지
+
+
+def test_check_alignment_pass_and_fail():
+    vspan = (1, 4)                       # BOS 뒤 3개가 이미지
+    text = torch.randn(5, 2)             # 텍스트 5개
+    H = torch.zeros(8, 2)
+    for t in range(5):
+        H[SB.text_index_to_pos(t, vspan)] = text[t]
+    H[1:4] = 99.0                        # 이미지 자리
+    SB.check_alignment(H, text, vspan)   # 통과
+    H_bad = H.clone()
+    H_bad[5] += 1.0
+    with pytest.raises(RuntimeError):
+        SB.check_alignment(H_bad, text, vspan)
+    with pytest.raises(RuntimeError):    # 길이 불일치
+        SB.check_alignment(H[:-1], text, vspan)
+
+
+def test_spatial_location_span_and_overlap():
+    ins = "pick up the black bowl between the plate and the ramekin and place it on the plate"
+    a, b = SB.spatial_location_span(ins)
+    assert ins[a:b] == "between the plate and the ramekin"
+    assert SB.spatial_location_span("open the top drawer of the cabinet") is None
+    pos_char = {10: (0, 4), 11: (5, 7), 12: (23, 30), 13: (57, 60)}
+    assert SB.overlapping_positions(pos_char, (a, b)) == [12]
+
+
+class _ToyLayer(torch.nn.Module):
+    def forward(self, hidden_states, attention_mask=None):  # noqa: ARG002
+        return hidden_states * 1.0
+
+
+class _ToyVLA:
+    def __init__(self):
+        self.decoder_layers = [_ToyLayer()]
+
+
+def test_embedding_substitution_hook_positional_and_kwarg():
+    vla = _ToyVLA()
+    sub = SB.EmbeddingSubstitution([0, 2], torch.full((2, 3), 7.0))
+    hs = sub.attach(vla)
+    try:
+        h = torch.zeros(1, 4, 3)
+        out_pos = vla.decoder_layers[0](h, attention_mask=None)
+        out_kw = vla.decoder_layers[0](hidden_states=h)
+    finally:
+        for x in hs:
+            x.remove()
+    for out in (out_pos, out_kw):
+        assert torch.equal(out[0, [0, 2]], torch.full((2, 3), 7.0))
+        assert torch.equal(out[0, [1, 3]], torch.zeros(2, 3))
+    assert sub.n_calls == 2
+    assert torch.equal(vla.decoder_layers[0](h), h)                       # 해제 후엔 무개입
+
+
+def test_layer0_recorder_records_and_stops():
+    vla = _ToyVLA()
+    rec = SB.Layer0Recorder(stop=True)
+    hs = rec.attach(vla)
+    try:
+        with pytest.raises(SB._StopForward):
+            vla.decoder_layers[0](torch.ones(1, 3, 2))
+    finally:
+        for x in hs:
+            x.remove()
+    assert rec.hidden.shape == (3, 2) and rec.hidden.dtype == torch.float32
+
+
+# ---------------------------------------------------------------- ICBench 방식 변형 (10)
+from vlamod import icbench as IC  # noqa: E402
+
+
+@pytest.mark.parametrize("tid", list(range(10)))
+def test_icbench_variants_well_formed(tid):
+    tgt, dis = IC.SPATIAL_SCENES[tid]
+    vs = IC.spatial_variants(tid, IC.SPATIAL_PREFIX + tgt + IC.SPATIAL_SUFFIX)
+    assert set(vs) == set(IC.VARIANTS)
+    assert len(set(vs.values())) == len(vs)                          # 변형끼리 전부 다름
+    # V5 의 위치는 두 그릇 어느 쪽과도 기준 물체가 겹치지 않음
+    v5 = IC.empty_location(tid)
+    assert not (IC._REF[v5] & (IC._REF[tgt] | IC._REF[dis]))
+    # R 은 방해 그릇의 위치구이고, 그 위치구는 다른 task 의 원래 지시문이기도 함 (학습 분포 안)
+    assert vs["R"] == IC.SPATIAL_PREFIX + dis + IC.SPATIAL_SUFFIX
+    assert any(dis == t for t, _ in IC.SPATIAL_SCENES.values())
+    assert "blue bowl" in vs["V1"] and "green plate" in vs["V2"] and "under the plate" in vs["V4"]
+
+
+def test_icbench_rejects_mismatched_instruction():
+    with pytest.raises(RuntimeError):
+        IC.spatial_variants(0, "pick up the black bowl on the stove and place it on the plate")
+
+
+def test_icbench_classify_and_divergence():
+    assert IC.classify(True, False, True, False) == "target"
+    assert IC.classify(False, True, False, True) == "distractor"
+    assert IC.classify(False, False, True, False) == "wrong_lift"
+    assert IC.classify(False, False, False, False) == "abstain"
+    import numpy as np
+    a = np.zeros((10, 3))
+    b = np.zeros((8, 3))
+    b[5:, 0] = 0.05
+    assert IC.first_divergence(a, b) == 5
+    assert IC.first_divergence(a, a) == -1
+    assert IC.changed_words("pick up the black bowl", "pick up the blue bowl") == ["blue"]

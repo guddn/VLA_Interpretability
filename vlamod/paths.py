@@ -9,6 +9,8 @@
       05_plots/              fig_*.png
       06_image_ablation/     image_ablation_<suite>.csv, examples/
       07_dump_model_input/   input_*.png
+      09_embedding_substitution/  embed_sub_<suite>.csv, baselines_<suite>.pt, gates_<suite>.txt
+      10_icbench_rollout/    variants_<suite>.csv, rollouts_<suite>.csv, traj_<suite>.npz
       setup_04_verify/       verify_render.png
       setup_05_diag_render/  diag_render.png
 
@@ -28,6 +30,8 @@ COUNTERFACTUAL = "04_counterfactual"
 PLOTS = "05_plots"
 IMAGE_ABLATION = "06_image_ablation"
 MODEL_INPUT = "07_dump_model_input"
+EMBED_SUB = "09_embedding_substitution"
+ICBENCH_ROLLOUT = "10_icbench_rollout"
 SETUP_VERIFY = "setup_04_verify"
 SETUP_DIAG = "setup_05_diag_render"
 

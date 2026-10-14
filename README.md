@@ -62,6 +62,7 @@ python scripts/03_correlation.py                                       # GPU 불
 python scripts/04_counterfactual.py --gpu 5 --suite spatial --tasks 0 1 2 3   # 05_plots 와 suite 맞추기
 python scripts/06_image_ablation.py --gpu 5 --suite spatial --tasks 0 1 2 3 4   # 04 와 같은 GPU 권장
 python scripts/05_plots.py         --suite spatial                      # GPU 불필요
+python scripts/09_embedding_substitution.py --gpu 5 --suite spatial --tasks 0 1 2 3 4   # 02 와 같은 GPU 권장
 ```
 
 **실행 위치**: 노트북은 코드 편집 + `pytest`, 서버는 나머지 전부.
@@ -260,7 +261,9 @@ scripts/
   06_image_ablation.py  L0         이미지 조건 5종 비교 (04 의 이미지판)
   07_dump_model_input.py           모델이 실제로 받은 이미지(pixel_values) PNG 로 복원
   08_policy_sanity.py   ★ 선행    정책 성공 확인. 이미지 전처리 × 그리퍼 변환 전/후 비교
-tests/test_core.py      GPU 없이 도는 단위 테스트 73개
+  09_embedding_substitution.py L2 0층 mean 치환(총 효과) vs knockout(직접 효과), 같은 프레임
+  10_icbench_rollout.py  L1      ICBench 방식 모순 지시 롤아웃 (가짜 성공 vs 실제 실패, A단계)
+tests/test_core.py      GPU 없이 도는 단위 테스트 93개
 ```
 
 ### 산출물
@@ -275,6 +278,8 @@ outputs/
   05_plots/              fig_*_<suite>.png
   06_image_ablation/     image_ablation_<suite>.csv, examples/
   07_dump_model_input/   input_*.png
+  09_embedding_substitution/  embed_sub_<suite>.csv, baselines_<suite>.pt, gates_<suite>.txt
+  10_icbench_rollout/    variants_<suite>.csv, rollouts_<suite>.csv, traj_<suite>.npz
   setup_04_verify/       verify_render.png
   setup_05_diag_render/  diag_render.png
 ```

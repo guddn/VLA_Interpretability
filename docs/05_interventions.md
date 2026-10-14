@@ -24,7 +24,7 @@ pixel_values ──▶ DINOv2+SigLIP ──▶ projector ──┐
   ▲                                              │
   └── [L1] 언어 입력       ✅ 04_counterfactual   │
                                                   ▼
-                             [L2] 토큰 임베딩 치환  ⬜ 미구현
+                             [L2] 토큰 임베딩 치환  ✅ 09_embedding_substitution
                                                   │
                                                   ▼
                         Llama-2-7B  32층 × 32헤드
@@ -134,18 +134,132 @@ pixel_values ──▶ DINOv2+SigLIP ──▶ projector ──┐
 > `--ambiguous-tasks` 로 **한 장면에 후보가 둘 이상인 task** 를 직접 지정해야
 > 이 반박을 막을 수 있습니다. 지정 안 하면 스크립트가 경고를 냅니다.
 
+
+### [L1] 확장 — ICBench 방식 모순 지시 (`scripts/10_icbench_rollout.py`, A단계, 2026-10-14)
+
+**질문**: 모순 지시를 받은 에피소드 초반의 내부 지표가, 그 에피소드가 **가짜 성공**(지시를 무시하고 원래 과제 완수)으로
+끝날지 **실제 실패**로 끝날지 **예측하는가**. 가짜 성공만 따로 보면 "언어 영향이 작다"는 결론이 선택 기준 자체라 순환이므로,
+반드시 실제 실패와 비교합니다.
+
+- 근거 논문: 2603.06001 (IGAR) 의 ICBench. **지시문 목록 미공개** → 논문의 V1–V4 분류를 따라 직접 만듦 (`vlamod/icbench.py`)
+- 장면 정보는 LIBERO bddl 에서 확인: spatial 10개 task 모두 같은 물체 7종, **검은 그릇 2개**, 성공 판정은 `(On akita_black_bowl_1 plate_1)`
+  (다른 그릇을 올리면 실패). **모든 장면에서 방해 그릇이 다른 task 의 위치구 자리에 있음**
+- 변형: `V1` blue bowl / `V2` green plate / `V3` 둘 다 / `V4` under the plate / `V5` 그릇이 없는 위치구 / **`R` 방해 그릇의 위치구**(만족 가능한 다른 명령)
+  - "white"·"red" 는 쓰지 않음: 라메킨이 흰 그릇처럼 보이고 접시 테두리가 붉어 모순이 아닐 수 있음
+  - `R` 은 학습 분포 안의 정상 명령이라 "best effort 였다" 반론이 통하지 않음 — 가장 깨끗한 조건
+- 결과 범주: `target`(가짜 성공) / `distractor`(방해 그릇을 접시에) / `wrong_lift` / `abstain`, 정상 궤적과 갈라진 스텝 `t_star`
+- **정상 지시로 성공한 초기 상태만** 비교에 씀 (원래 실력 부족으로 인한 실패와 분리)
+- B단계(11, 예정): 저장한 행동을 시뮬레이터에서 재생해 프레임 복원 → 정상/변형 지시를 같은 프레임에 넣어 R·KL·바뀐 단어 토큰 attention 비교,
+  가짜 성공 vs 실제 실패 예측력(AUC, 에피소드 bootstrap)
+
+!! 실제 실패가 거의 안 나오면(OFT 는 spatial 에서 SR 92–98%) 예측 비교는 표본 부족 → 파일럿으로 먼저 확인.
+
 ---
 
-## [L2] 토큰 임베딩 치환 — ⬜ 미구현
+## [L2] 토큰 임베딩 치환 — ✅ `scripts/09_embedding_substitution.py` (2026-10-14 추가)
 
-**무엇을 바꾸나**: 토큰이 이미 벡터가 된 뒤, 그 벡터를 다른 값으로 교체.
+**무엇을 바꾸나**: 토큰이 벡터가 된 뒤(0층 입력), 지정한 위치의 벡터를 **기준값(baseline)** 으로 교체.
+위치(RoPE)·시퀀스 길이·attention 구조는 그대로입니다. 구현: `vlamod/substitute.py`.
 
-[L1]과 다른 점: [L1]은 토큰 **개수와 위치**까지 바뀌지만, [L2]는 **시퀀스 구조를 고정한 채
-내용만** 바꿉니다. 그래서 위치 효과와 내용 효과를 분리할 수 있습니다.
+### 왜 필요한가 — knockout 은 "직접 효과"만 잽니다
 
-`vlamod/pipeline.py` 의 `counterfactual_instruction()` 이 비슷한 일을 하지만,
-실제로는 문자열을 바꿔 다시 토큰화하므로 **[L1]에 가깝습니다.** 그리고
-`04_counterfactual.py` 는 이 함수를 쓰지 않고 자체 구현을 씁니다 — **중복입니다.**
+[L3] knockout 이 막는 것은 **Q 행(290–296) → 대상 key** 뿐입니다. 다른 위치를 거쳐 가는 우회 경로는 열려 있습니다.
+
+| knockout | 열려 있는 우회 경로 | 우회 위치 수 (task 0) |
+|---|---|---|
+| L 차단 | L → 템플릿 286–289 → Q | 4 |
+| V 차단 | V → 템플릿 257–265 / **L 266–285** / 템플릿 286–289 → Q | **33** |
+
+그래서 02 의 `causal_ratio` 는 **직접 효과끼리의 비교**이고, 우회 기회가 V 쪽에 8배 넘게 많습니다
+(→ 이미지 기여 과소평가 가능성. 아래 "알려진 문제" 6번).
+치환은 그 위치의 **내용 자체**를 0층에서 바꾸므로 이후 모든 층·모든 위치가 바뀐 내용을 봅니다 → **총 효과**.
+09 는 같은 프레임에서 knockout 과 치환을 **둘 다** 계산해 행 단위로 비교합니다.
+
+### 왜 0층 pre-hook 인가
+
+OpenVLA(Prismatic)는 `[BOS 임베딩 | projector(패치) | 나머지 텍스트 임베딩]` 을 이어 Llama 의 `inputs_embeds` 로 넘기고,
+Llama 는 위치 임베딩을 더하지 않습니다(RoPE 는 attention 안). 따라서 **0번 decoder layer 의 입력 = 멀티모달 임베딩**이고,
+여기에 hook 을 걸면 텍스트·이미지를 같은 절대 위치(`spans.*`)로 다룰 수 있습니다. Prismatic 내부 속성 이름에 의존하지 않습니다.
+
+### 기준값
+
+| 기준값 | 정의 | 채택 |
+|---|---|---|
+| **mean** (주 조건) | **L**: suite 전체(spatial 10개) 지시문의 L 토큰 임베딩 **빈도 가중 평균** — "L 자리에 올 임베딩의 기댓값" (벡터 1개)<br>**V**: 수집한 모든 프레임의 0층 V 입력(= projector 출력)을 **패치 위치별** 평균 (256개) | ✅ |
+| **mean_rescaled** | mean 의 방향, 크기는 치환되는 원래 임베딩들의 평균 L2 크기 | ✅ L·V |
+| 실제 토큰(resample) | 같은 길이의 다른 지시문 / 다른 장면 | ❌ 0층에서는 **04 swapped·06 other_scene 과 수학적으로 동일** — 새 정보 없음 |
+| zero | 0 벡터 | ❌ 분포 밖 (검증계획에서도 금지) |
+| Gaussian noise | ROME 식 3σ | ❌ Zhang & Nanda(2309.16042) 가 불안정하다고 보고 |
+
+mean_rescaled 를 넣은 이유: 평균 벡터는 원래 토큰보다 **크기가 작습니다**(평균하면 줄어듦). "크기가 작아서 분포 밖이 됐다"는 반박에 대비합니다.
+실행 시 `‖mean‖ / 평균‖원래‖` 비율을 출력하고 CSV 에도 남깁니다(`norm_*`).
+
+!! **mean 치환이 재는 것은 "언어 전체"가 아닙니다.** 평균 벡터에도 bowl·plate 같은 suite 공통 의미가 섞여 있으므로
+"suite 평균에서 벗어나는, **이 지시문만의 정보**"를 잽니다. V 도 "평균 장면 대비 **이 장면만의 정보**"입니다.
+knockout(경로 자체 차단)과 측정 대상이 다르다는 점을 결과 해석에 반드시 적으세요.
+
+### 조건 (한 프레임당 forward 최대 12회)
+
+| 조건 | 바꾸는 위치 | 바꾸는 값 |
+|---|---|---|
+| base | — | — |
+| knockout L / V / ctrl | (02 와 동일) | Q 행 attention 차단 |
+| `sub` L | `spans.language` (20) | L mean |
+| `sub` V | `spans.visual` (256) | V mean (위치별) |
+| `sub` ctrl | knockout 대조군과 **같은** 무작위 \|L\|개 V 위치 (seed 0) | 그 위치의 V mean |
+| `sub_rescaled` L / V | 위와 같음 | mean_rescaled |
+| `Lloc` / `Lshared` (spatial 전용) | L 중 **위치구** / 나머지 | L mean |
+
+**구간 치환의 근거**: spatial 지시문은 모두 `pick up the black bowl [위치구] and place it on the plate` 입니다.
+**task 를 구분하는 정보는 위치구에만** 있습니다. 위치구 치환이 크면 "어느 그릇인지" 정보를 실제로 씁니다.
+반대로 나머지 치환이 지배적이면 지시문을 "형식"으로 쓰는 쪽입니다. `--no-segments` 로 끕니다.
+
+프레임 수집: 06 처럼 롤아웃을 먼저 끝까지 돌려 프레임을 모은 뒤(V 평균에 전 프레임 필요), 분석합니다.
+기본값 task 0–4 × 3 에피소드, `--stride 10`, `--max-steps 220` (약 200 프레임).
+정책·규칙이 02 와 같으므로 **02 와 같은 GPU 로 돌리면 (task, ep, t) 프레임이 02 와 같아집니다.**
+
+### 통과 기준 (gates) — 못 넘으면 결과를 해석하지 않음
+
+| | 내용 | 실패 시 |
+|---|---|---|
+| **G1 정렬** | 매 프레임, 0층 입력의 **V 가 아닌 모든 위치** == `embed_tokens(텍스트 id)` (소거법으로 V 위치 확정) | 즉시 중단 |
+| **G2 항등** | 앞 `--gate-frames`(3) 프레임, L·V 를 원래 0층 입력으로 "치환" → KL ≈ 0 (허용 max(1e-6, 2×G3)) | 즉시 중단 |
+| **G3 바닥값** | 같은 프레임 base 재실행 KL (같은 GPU 재현성) | 기록 |
+| **G4 대조군** | `KL_lang_sub > KL_control_sub` 인 행 비율 | 50% 미만이면 경고 |
+
+결과는 `gates_<suite>.txt` 에 남습니다. hook 은 transformers 4.40.1 의 실제 `LlamaDecoderLayer` 로 소형 모델 통합 검사를 했습니다
+(항등 치환 logit 차이 0.0, hook 치환 = 수동 `inputs_embeds` 치환, 치환 위치 이전 logit 불변, knockout 과 동시 부착 가능).
+
+### 해석 규칙 — 결과를 보기 전에 고정
+
+1. **`ratio_L_sub_ko`, `ratio_V_sub_ko`** (= KL_sub / KL_knockout, 행 단위) 의 중앙값 + **에피소드 cluster bootstrap 95% CI**
+   - < 1: knockout 효과의 일부는 attention 재정규화로 인한 분포 밖 교란
+   - \> 1: 우회 경로가 정보를 나름 (총 효과 > 직접 효과)
+   - **V 쪽 비율이 L 쪽보다 뚜렷이 크면** 위 직접/총 효과 비대칭이 실제로 작동한다는 증거
+2. **`causal_ratio_sub` vs `causal_ratio_ko`**: 평균 차이(CI) + 에피소드 내 Spearman ρ.
+   크게 다르면 02 의 "언어:이미지 ≈ 반반" 은 **개입 방식에 의존하는 값**으로 격하해 보고
+3. **구간 치환**: `KL_Lloc_sub` vs `KL_Lshared_sub` (토큰 수 7 대 12 내외라 크기 효과가 섞임 — 토큰 수 함께 보고)
+4. **`R_raw_under_Lsub`**: 내용을 평균으로 바꿔도 attention 이 그 자리로 계속 가면(R_raw 유지) "attention 은 내용이 아니라 **자리**를 따라간다" — H2 보조 증거
+
+수치 임계값(예: ρ ≥ 0.5)은 임의라서 두지 않았습니다. 방향과 CI 로만 판단합니다.
+
+### 해석할 때 주의할 점 (공격 지점)
+
+- mean 도 실제 토큰은 아닙니다. 특히 V 의 위치별 평균은 흐릿한 "평균 장면"입니다. 분포 밖 위험이 **줄었을 뿐 없어지지 않았습니다**. rescaled·G4 는 부분 방어입니다
+- V 평균에 분석 대상 프레임 자신이 약 1/N(≈1/200) 섞입니다. 무시할 수준이지만 엄밀히는 누출입니다
+- L 평균은 suite 10개 지시문 기준입니다. suite 목록을 못 읽으면 실행한 task 의 지시문만 쓰고 로그에 `!!` 로 표시합니다
+- ISS(2605.00321)의 "distribution-matched baseline" 정확한 정의는 **원문 미확인**입니다. "ISS 재현"이 아니라 **"ISS 계열 mean ablation"** 으로 쓸 것
+- 0층 치환만 구현했습니다. 층별 activation patching(같은 위치의 l층 잔차를 l층 평균으로)은 미구현
+- `vlamod/pipeline.py` 의 `counterfactual_instruction()` 은 이름과 달리 문자열을 다시 토큰화하므로 [L1] 입니다 (04 와 중복, 정리 대상)
+
+### 실행
+
+```bash
+python scripts/09_embedding_substitution.py --gpu 4 --suite spatial --tasks 0 1 2 3 4 --episodes 3
+#   --no-rescaled / --no-segments 로 forward 를 줄일 수 있음, --gate-frames 로 G2·G3 프레임 수 조정
+```
+
+출력 `outputs/09_embedding_substitution/`: `embed_sub_<suite>.csv`, `baselines_<suite>.pt`, `gates_<suite>.txt`. 컬럼 정의는 `docs/06_metrics.md` §5-2.
 
 ---
 
@@ -273,7 +387,7 @@ KL 은 **action 이 이산 bin 으로 토큰화된 모델에서만** 정의됩�
 |---|---|---|---|---|---|
 | [L0] 이미지 입력 | 픽셀 | ✅ | 5 | **높음** | 낮음(`other_scene`)~높음(`noise`) |
 | [L1] 언어 입력 | 지시문 문자열 | ✅ | 4 | **높음** | 낮음(`swapped`)~높음(`empty`) |
-| [L2] 임베딩 치환 | 토큰 벡터 | ⬜ | 0 | 중간 | 낮음 |
+| [L2] 임베딩 치환 | 토큰 벡터 (0층) | ✅ | 7 (+knockout 3 동시) | 중간 | 중간 (mean 은 실제 토큰 아님) |
 | [L3] attention mask | 정보 경로 | ✅ | 3 | 낮음(Transformer 전용) | **없음** |
 | [L4] 층·헤드 | 개입 범위 | ⚠ 미노출 | 0 | 낮음 | 없음 |
 
@@ -303,6 +417,9 @@ KL 은 **action 이 이산 bin 으로 토큰화된 모델에서만** 정의됩�
    "config 에 적힌 대로 돌렸다"가 거짓이 되므로 재현성 관점에서 위험합니다.
    제거하거나 실제로 연결해야 합니다.
 5. **연속 action 지표 부재** — KL 은 이산 bin 전용. π0 등으로 확장 불가
+6. **[L3] knockout 은 직접 효과만 잼 (2026-10-14 발견)** — Q 행만 차단하므로 우회 경로가 열려 있고,
+   우회 위치가 L 4개 vs V 33개로 비대칭. 02 의 `causal_ratio` 는 이미지 기여를 과소평가했을 수 있음.
+   → [L2] `09_embedding_substitution.py` 로 총 효과와 비교 (결과 대기)
 
 ---
 
@@ -316,4 +433,6 @@ KL 은 **action 이 이산 bin 으로 토큰화된 모델에서만** 정의됩�
 | "LIBERO 는 원래 언어가 필요 없다" | `--ambiguous-tasks` 조건 필수. 없으면 결론을 약하게 쓸 것 |
 | "전층을 한꺼번에 막은 결과 아닌가" | **현재 방어 불가.** [L4] 노출이 필요 |
 | "이미지 쪽은 왜 안 했나" | [L0] `06_image_ablation.py` 로 대응. `other_scene` 이 [L1] `swapped` 와 같은 단위의 짝 |
+| "knockout 은 우회 경로가 열려 있지 않나" | 맞음 (직접 효과). [L2] 치환으로 총 효과를 같은 프레임에서 재고 비율을 보고 |
+| "평균 벡터 치환도 분포 밖 아닌가" | 일부 맞음. `mean_rescaled`(크기 보정)·G4(무작위 위치 대조군)로 부분 방어, 한계로 명시 |
 | "other_scene 은 로봇 자세까지 바뀌지 않나" | 맞음. 같은 task·다른 시점 조건으로 분리 필요 (미구현) — 결론에 명시할 것 |

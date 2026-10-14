@@ -231,6 +231,23 @@ $$\#\{d : \arg\max_b p_d(b) \ne \arg\max_b q_d(b)\}$$
 
 04 의 `swapped` ↔ 06 의 `other_scene`, 04 의 `empty` ↔ 06 의 `noise` 가 같은 단위로 짝을 이룹니다. 같은 GPU 로 돌리면 장면 단위로도 짝지을 수 있습니다.
 
+### 5-2. 임베딩 치환 (`09_embedding_substitution.py`)
+
+`outputs/09_embedding_substitution/embed_sub_<suite>.csv` — 한 행 = 한 프레임. 설계·기준값·해석 규칙은 `docs/05_interventions.md` [L2].
+
+| 컬럼 | 정의 |
+|---|---|
+| `KL_{lang,vis,control}_knockout` | §4 와 동일 (같은 프레임에서 다시 계산) |
+| `KL_{lang,vis,control}_sub` | 0층에서 해당 위치를 **mean** 기준값으로 치환한 KL. control 은 knockout 대조군과 같은 위치 |
+| `KL_{lang,vis}_sub_rescaled` | mean 방향 + 원래 평균 크기 |
+| `causal_ratio_ko` / `causal_ratio_sub` / `causal_ratio_sub_rescaled` | KL_L / (KL_L + KL_V), 개입 방식별 |
+| `ratio_L_sub_ko`, `ratio_V_sub_ko` | KL_sub / KL_knockout — 총 효과 / 직접 효과 |
+| `argmax_changed_*` | 7 DoF 중 argmax bin 이 바뀐 수 |
+| `R_raw_under_Lsub`, `R_raw_under_Vsub` | 치환한 상태에서의 R_raw (내용이 바뀌어도 그 자리를 보는가) |
+| `n_L_loc`, `n_L_shared`, `KL_Lloc_sub`, `KL_Lshared_sub` | spatial 위치구 / 나머지 L 만 치환 |
+| `norm_L_orig`, `norm_V_orig`, `norm_L_mean`, `norm_V_mean` | 0층 벡터 평균 L2 크기 (원래 vs 기준값) |
+| `ep_success` | 롤아웃 성공 여부 |
+
 ---
 
 ## 6. 통계 (`03_correlation.py`)

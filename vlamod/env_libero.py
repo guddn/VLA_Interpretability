@@ -56,6 +56,22 @@ def make_task(suite: str = "spatial", task_id: int = 0, resolution: int = 256) -
     return LiberoTask(suite, task_id, instruction, env, init_states)
 
 
+def suite_instructions(suite: str = "spatial") -> list[str]:
+    """suite 의 전체 task 지시문 (env 를 만들지 않으므로 빠름). 09 의 언어 평균 기준값에 씁니다."""
+    from libero.libero import benchmark
+
+    bench = benchmark.get_benchmark_dict()[SUITE_MAP[suite]]()
+    out = []
+    n = getattr(bench, "n_tasks", None) or bench.get_num_tasks()
+    for i in range(n):
+        task = bench.get_task(i)
+        ins = getattr(task, "language", None) or getattr(task, "task_description", None)
+        if ins is None:
+            raise RuntimeError(f"task {i} 에서 language instruction 을 못 찾았습니다.")
+        out.append(ins)
+    return out
+
+
 def reset_to(task: LiberoTask, episode: int = 0):
     task.env.reset()
     obs = task.env.set_init_state(task.init_states[episode % len(task.init_states)])
