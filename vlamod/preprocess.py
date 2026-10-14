@@ -58,3 +58,46 @@ def apply_variant(raw, name: str) -> Image.Image:
     if spec["crop"]:
         img = center_crop_resize(img)
     return img
+
+
+# ---------------------------------------------------------------------
+# 이미지 쪽 개입용 변형 (scripts/06_image_ablation.py)
+# 입력은 **모델에 넣기 직전 이미지**(obs_to_image 결과, 180° 회전 완료)입니다.
+# ---------------------------------------------------------------------
+def hflip(img: Image.Image) -> Image.Image:
+    """좌우 반전. 공간 관계(왼쪽/오른쪽)를 뒤집습니다."""
+    import numpy as np
+    a = np.asarray(img)[:, ::-1]
+    return Image.fromarray(np.ascontiguousarray(a).astype("uint8"))
+
+
+def patch_shuffle(img: Image.Image, block: int = 32, seed: int = 0) -> Image.Image:
+    """block×block 타일을 무작위로 섞습니다.
+
+    픽셀 값의 집합(색 분포)은 그대로 두고 **배치(공간 구조)만** 깹니다.
+    "이미지의 저수준 통계만 써도 되는가"를 묻는 대조 조건입니다.
+    """
+    import numpy as np
+    a = np.asarray(img)
+    h, w = a.shape[:2]
+    if h % block or w % block:
+        raise ValueError(f"이미지 크기 {w}x{h} 가 block={block} 으로 나누어떨어지지 않습니다.")
+    c = a.shape[2] if a.ndim == 3 else 1
+    a = a.reshape(h, w, c)
+    nh, nw = h // block, w // block
+    tiles = a.reshape(nh, block, nw, block, c).transpose(0, 2, 1, 3, 4).reshape(nh * nw, block, block, c)
+    perm = np.random.default_rng(seed).permutation(nh * nw)
+    if np.all(perm == np.arange(nh * nw)):          # 극히 드문 항등 순열 방지
+        perm = np.roll(perm, 1)
+    out = tiles[perm].reshape(nh, nw, block, block, c).transpose(0, 2, 1, 3, 4).reshape(h, w, c)
+    if c == 1:
+        out = out[..., 0]
+    return Image.fromarray(np.ascontiguousarray(out).astype("uint8"))
+
+
+def noise_image(size: tuple[int, int] = (256, 256), seed: int = 0) -> Image.Image:
+    """균등 난수 RGB 이미지. 이미지 정보가 전혀 없는 조건 (학습 분포 밖)."""
+    import numpy as np
+    w, h = size
+    a = np.random.default_rng(seed).integers(0, 256, (h, w, 3), dtype=np.uint8)
+    return Image.fromarray(a)

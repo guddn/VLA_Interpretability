@@ -60,6 +60,7 @@ python scripts/08_policy_sanity.py --gpu 5 --tasks 0 --gripper-fix both   # ★ 
 python scripts/02_run_analysis.py  --gpu 5 --suite spatial --tasks 0 1 2 --episodes 3
 python scripts/03_correlation.py   --csv outputs/analysis_spatial.csv    # GPU 불필요
 python scripts/04_counterfactual.py --gpu 5 --suite spatial --tasks 0 1 2 3   # 05_plots 와 suite 맞추기
+python scripts/06_image_ablation.py --gpu 5 --suite spatial --tasks 0 1 2 3 4   # 04 와 같은 GPU 권장
 python scripts/05_plots.py         --suite spatial                      # GPU 불필요
 ```
 
@@ -256,9 +257,10 @@ scripts/
   03_correlation.py     H2         상관 + 대조군 t-검정
   04_counterfactual.py  H1         지시 조건 4종 비교
   05_plots.py                      그림 4장
+  06_image_ablation.py  L0         이미지 조건 5종 비교 (04 의 이미지판)
   07_dump_model_input.py           모델이 실제로 받은 이미지(pixel_values) PNG 로 복원
   08_policy_sanity.py   ★ 선행    정책 성공 확인. 이미지 전처리 × 그리퍼 변환 전/후 비교
-tests/test_core.py      GPU 없이 도는 단위 테스트 65개
+tests/test_core.py      GPU 없이 도는 단위 테스트 70개
 ```
 
 ### 산출물

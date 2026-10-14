@@ -218,6 +218,19 @@ $$\#\{d : \arg\max_b p_d(b) \ne \arg\max_b q_d(b)\}$$
 
 개입 위치별 분류는 `docs/05_interventions.md` 참고.
 
+### 5-1. 이미지 개입 (`06_image_ablation.py`)
+
+`outputs/image_ablation_<suite>.csv` — 04 와 같은 지표·같은 규약, 지시문은 항상 원래 것.
+
+| 컬럼 | 정의 |
+|---|---|
+| `condition` | `valid` / `other_scene`(같은 ep·t 의 다른 task 장면) / `hflip`(좌우 반전) / `patch_shuffle`(32×32 타일 섞기) / `noise`(난수 이미지) |
+| `scene_task` | 실제로 넣은 장면의 task id (`other_scene` 만 자기와 다름) |
+| `mass_sink` | §3-1 과 동일 |
+| 나머지 | §5 의 04 와 동일 (`KL_vs_valid`, `n_identical_dof`, R 3종) |
+
+04 의 `swapped` ↔ 06 의 `other_scene`, 04 의 `empty` ↔ 06 의 `noise` 가 같은 단위로 짝을 이룹니다. 같은 GPU 로 돌리면 장면 단위로도 짝지을 수 있습니다.
+
 ---
 
 ## 6. 통계 (`03_correlation.py`)

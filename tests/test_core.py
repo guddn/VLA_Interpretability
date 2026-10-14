@@ -550,3 +550,47 @@ def test_build_spans_empty_instruction_allowed_only_when_requested():
                            allow_empty_language=True)
     assert spans.language == []
     assert len(spans.query) == 7
+
+
+# ------------------------------------------------ 이미지 개입 변형 (06_image_ablation)
+from vlamod import preprocess as PP  # noqa: E402
+
+
+def _toy_image(h=64, w=64):
+    import numpy as np
+    from PIL import Image
+    a = (np.arange(h * w * 3).reshape(h, w, 3) % 251).astype("uint8")
+    return Image.fromarray(a)
+
+
+def test_hflip_twice_is_identity_and_flips_columns():
+    import numpy as np
+    img = _toy_image()
+    f = PP.hflip(img)
+    assert np.array_equal(np.asarray(f), np.asarray(img)[:, ::-1])
+    assert np.array_equal(np.asarray(PP.hflip(f)), np.asarray(img))
+
+
+def test_patch_shuffle_keeps_pixels_changes_layout():
+    import numpy as np
+    img = _toy_image()
+    s = PP.patch_shuffle(img, block=16, seed=3)
+    a, b = np.asarray(img), np.asarray(s)
+    assert a.shape == b.shape
+    assert np.array_equal(np.sort(a.ravel()), np.sort(b.ravel()))   # 색 분포 동일
+    assert not np.array_equal(a, b)                                  # 배치는 다름
+    # 같은 seed 면 같은 결과 (재현성)
+    assert np.array_equal(b, np.asarray(PP.patch_shuffle(img, block=16, seed=3)))
+
+
+def test_patch_shuffle_rejects_bad_block():
+    with pytest.raises(ValueError):
+        PP.patch_shuffle(_toy_image(60, 60), block=16)
+
+
+def test_noise_image_deterministic():
+    import numpy as np
+    a = np.asarray(PP.noise_image((32, 32), seed=1))
+    assert a.shape == (32, 32, 3)
+    assert np.array_equal(a, np.asarray(PP.noise_image((32, 32), seed=1)))
+    assert not np.array_equal(a, np.asarray(PP.noise_image((32, 32), seed=2)))
