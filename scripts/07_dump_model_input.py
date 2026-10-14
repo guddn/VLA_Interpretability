@@ -5,7 +5,7 @@
 
 왜 필요한가
 -----------
-`outputs/smoke_libero_view.png` 는 **processor 에 넣기 전** 이미지(256×256)입니다.
+`outputs/01_smoke_forward/smoke_libero_view.png` 는 **processor 에 넣기 전** 이미지(256×256)입니다.
 모델이 보는 건 그게 아니라 `processor(prompt, image)["pixel_values"]` 입니다.
 그 사이에서 리사이즈(224×224), 정규화, 그리고 **백본별로 다른 전처리**가 일어납니다.
 
@@ -21,9 +21,9 @@ OpenVLA(Prismatic)는 **DINOv2 + SigLIP 두 백본**을 쓰므로 `pixel_values`
 
 출력
 ----
-  outputs/input_00_original.png   processor 이전 (우리가 만든 이미지)
-  outputs/input_01_backbone0.png  pixel_values 채널 0~2 를 역정규화
-  outputs/input_02_backbone1.png  채널 3~5 (있으면)
+  outputs/07_dump_model_input/input_00_original.png   processor 이전 (우리가 만든 이미지)
+  outputs/07_dump_model_input/input_01_backbone0.png  pixel_values 채널 0~2 를 역정규화
+  outputs/07_dump_model_input/input_02_backbone1.png  채널 3~5 (있으면)
 
 !! 역정규화 상수를 못 찾으면 채널별 min-max 로 펴서 보여줍니다.
    그건 **정확한 복원이 아니라 '구도 확인용'** 입니다. 로그에 그렇게 찍습니다.
@@ -44,6 +44,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from vlamod.device import apply_env, apply_overrides, report_gpu  # noqa: E402
 from vlamod import token_index as TI  # noqa: E402
+from vlamod import paths as OP  # noqa: E402
 from vlamod.model_loader import load_openvla  # noqa: E402
 
 
@@ -117,7 +118,7 @@ def main() -> int:
     apply_env(cfg, args)
     mcfg = cfg["model"]
     apply_overrides(mcfg, args)
-    os.makedirs("outputs", exist_ok=True)
+    out_dir = OP.out_dir(OP.MODEL_INPUT)
 
     vla = load_openvla(path=mcfg["path"], device=mcfg["device"], dtype=mcfg["dtype"],
                        attn_implementation=mcfg["attn_implementation"],
@@ -143,8 +144,9 @@ def main() -> int:
     a = np.asarray(img)
     print(f"  크기 {img.size}  shape {a.shape}  dtype {a.dtype}  "
           f"범위 [{a.min()}, {a.max()}]  std {a.std():.1f}")
-    img.save("outputs/input_00_original.png")
-    print("  저장: outputs/input_00_original.png")
+    orig_png = os.path.join(out_dir, "input_00_original.png")
+    img.save(orig_png)
+    print(f"  저장: {orig_png}")
     print(f"  instruction: {instruction!r}")
 
     # ---- processor 통과 -----------------------------------------------
@@ -182,7 +184,7 @@ def main() -> int:
         if chunk.shape[0] < 3:
             break
         m, s = (stats[g] if g < len(stats) else (stats[0] if stats else (None, None)))
-        path = f"outputs/input_{g + 1:02d}_backbone{g}.png"
+        path = os.path.join(out_dir, f"input_{g + 1:02d}_backbone{g}.png")
         how = to_png(chunk, m, s, path)
         print(f"  {path}")
         print(f"    복원 방식: {how}")

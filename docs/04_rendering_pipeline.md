@@ -1,6 +1,6 @@
 # 렌더링 파이프라인 — 픽셀 한 장이 만들어져 모델에 들어가기까지
 
-`outputs/verify_render.png` 같은 이미지가 **어떤 패키지를 거쳐** 생기는지, 그리고
+`outputs/setup_04_verify/verify_render.png` 같은 이미지가 **어떤 패키지를 거쳐** 생기는지, 그리고
 그게 OpenVLA 로 넘어가 **256개 visual token** 이 되기까지의 전 과정.
 
 ---

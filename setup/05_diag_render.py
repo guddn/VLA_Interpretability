@@ -51,7 +51,7 @@ def main() -> int:
     ap.add_argument("--suite", default="spatial")
     ap.add_argument("--task-id", type=int, default=0)
     ap.add_argument("--resolution", type=int, default=256)
-    ap.add_argument("--out", default="outputs/diag_render.png")
+    ap.add_argument("--out", default="outputs/setup_05_diag_render/diag_render.png")
     args = ap.parse_args()
 
     try:
@@ -67,7 +67,7 @@ def main() -> int:
     n_egl = probe_egl_devices()
     egl_id, why = resolve_egl_device(args.gpu, args.egl_device)
     os.environ["MUJOCO_EGL_DEVICE_ID"] = str(egl_id)
-    os.makedirs("outputs", exist_ok=True)
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     print(f"[device] torch=cuda:{args.gpu} (미사용)  "
           f"render=egl:{egl_id}  EGL 디바이스 수={n_egl}  ({why})")
 

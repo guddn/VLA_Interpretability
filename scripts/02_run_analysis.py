@@ -1,7 +1,8 @@
 """Phase 2+3: LIBERO 롤아웃을 돌면서 매 스텝 비율 + knockout KL 을 기록.
 
-출력: outputs/analysis_<suite>.csv  (tidy)
-      outputs/perlayer_<suite>.npz  (층별 배열)
+출력: outputs/02_run_analysis/analysis_<suite>.csv  (tidy)
+      outputs/02_run_analysis/perlayer_<suite>.npz  (층별 배열)
+      --tag X 를 주면 outputs/02_run_analysis/X/analysis_<suite>_X.csv 처럼 하위 폴더로
 
 사용:
     python scripts/02_run_analysis.py --suite spatial --tasks 0 1 2 --episodes 3 --max-steps 40
@@ -23,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from vlamod.device import apply_env, apply_overrides, report_gpu  # noqa: E402
 from vlamod import env_libero as EL  # noqa: E402
 from vlamod import pipeline as P  # noqa: E402
+from vlamod import paths as OP  # noqa: E402
 from vlamod import token_index as TI  # noqa: E402
 from vlamod.model_loader import load_openvla  # noqa: E402
 
@@ -158,10 +160,10 @@ def main() -> int:
 
     df = pd.DataFrame(rows)
     stem = f"{args.suite}{'_' + args.tag if args.tag else ''}"
-    out_csv = f"outputs/analysis_{stem}.csv"
+    out_csv = OP.out_path(OP.ANALYSIS, f"analysis_{stem}.csv", tag=args.tag)
     df.to_csv(out_csv, index=False)
     np.savez(
-        f"outputs/perlayer_{stem}.npz",
+        OP.out_path(OP.ANALYSIS, f"perlayer_{stem}.npz", tag=args.tag),
         R_raw=np.array([p["R_raw"] for p in per_layer_acc]),
         R_norm=np.array([p["R_norm"] for p in per_layer_acc]),
         R_vnorm=np.array([p["R_vnorm"] for p in per_layer_acc]),
@@ -195,5 +197,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    os.makedirs("outputs", exist_ok=True)
     sys.exit(main())

@@ -273,7 +273,7 @@ LIBERO 의 API 는 버전에 따라 달라지고, 여기서 추상화를 두껍�
 ### 검증 필요 지점 2개
 1. **이미지 상하 반전.** LIBERO 의 `agentview_image` 는 뒤집혀 나옵니다.
    방향이 틀리면 **vision attention 분석 전체가 무의미**해집니다.
-   `scripts/01 --libero` 가 `outputs/smoke_libero_view.png` 를 저장하니 열어서 확인하세요.
+   `scripts/01 --libero` 가 `outputs/01_smoke_forward/smoke_libero_view.png` 를 저장하니 열어서 확인하세요.
 2. **instruction 속성명.** `task.language` vs `task.task_description` — 버전마다 다릅니다.
    둘 다 없으면 `RuntimeError`.
 

@@ -293,7 +293,7 @@ def main() -> int:
     ap.add_argument("--hf-home", default=None,
                     help="HuggingFace 캐시 루트. config 의 env.hf_home 을 덮어씀")
     ap.add_argument("--skip-render", action="store_true")
-    ap.add_argument("--out", default="outputs/verify_render.png")
+    ap.add_argument("--out", default="outputs/setup_04_verify/verify_render.png")
     ap.add_argument("--force", action="store_true",
                     help="Windows 등 비대상 환경에서도 강행")
     args = ap.parse_args()
@@ -355,7 +355,7 @@ def main() -> int:
     print(f"[device] 검사 대상 cuda:{gpu_list[0]}{shard}  "
           f"render=egl:{egl_id}  EGL 디바이스 수={n_egl}  ({why})")
 
-    os.makedirs("outputs", exist_ok=True)
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 
     print("\n=== Stage 1 검증 " + "=" * 48)
     c_python()

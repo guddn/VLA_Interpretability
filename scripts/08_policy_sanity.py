@@ -195,5 +195,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    os.makedirs("outputs", exist_ok=True)
     sys.exit(main())

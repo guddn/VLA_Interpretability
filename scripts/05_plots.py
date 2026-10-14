@@ -1,5 +1,9 @@
 """02/03/04 결과를 그림으로.
 
+입력: outputs/02_run_analysis/{perlayer,analysis}_<suite>.npz/.csv
+      outputs/04_counterfactual/counterfactual_<suite>.csv
+출력: outputs/05_plots/fig_*_<suite>.png
+
 사용:
     python scripts/05_plots.py --suite spatial
 """
@@ -15,6 +19,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from vlamod import paths as OP  # noqa: E402
 from vlamod import viz  # noqa: E402
 
 
@@ -24,9 +29,10 @@ def main() -> int:
     args = ap.parse_args()
     made = []
 
-    pl_path = f"outputs/perlayer_{args.suite}.npz"
-    csv_path = f"outputs/analysis_{args.suite}.csv"
-    cf_path = f"outputs/counterfactual_{args.suite}.csv"
+    pl_path = OP.find_input(OP.ANALYSIS, f"perlayer_{args.suite}.npz")
+    csv_path = OP.find_input(OP.ANALYSIS, f"analysis_{args.suite}.csv")
+    cf_path = OP.find_input(OP.COUNTERFACTUAL, f"counterfactual_{args.suite}.csv")
+    fig_dir = OP.out_dir(OP.PLOTS)
 
     if os.path.exists(pl_path):
         z = np.load(pl_path)
@@ -34,7 +40,7 @@ def main() -> int:
         base = None
         if os.path.exists(csv_path):
             base = float(pd.read_csv(csv_path)["uniform_baseline"].mean())
-        made.append(viz.plot_layerwise(per_layer, base, f"outputs/fig_layerwise_{args.suite}.png"))
+        made.append(viz.plot_layerwise(per_layer, base, os.path.join(fig_dir, f"fig_layerwise_{args.suite}.png")))
 
     if os.path.exists(csv_path):
         df = pd.read_csv(csv_path)
@@ -46,7 +52,7 @@ def main() -> int:
                 from scipy import stats
                 rho = float(stats.spearmanr(df["R_norm"][m], cr[m])[0])
             made.append(viz.plot_ratio_vs_causal(
-                df["R_norm"][m], cr[m], f"outputs/fig_h2_{args.suite}.png", rho=rho))
+                df["R_norm"][m], cr[m], os.path.join(fig_dir, f"fig_h2_{args.suite}.png"), rho=rho))
 
     if os.path.exists(cf_path):
         cf = pd.read_csv(cf_path)
@@ -54,11 +60,11 @@ def main() -> int:
                  if c in set(cf["condition"])]
         g = cf.groupby("condition")["R_norm"].mean().reindex(order)
         made.append(viz.plot_conditions(
-            list(g.index), list(g.values), f"outputs/fig_cf_ratio_{args.suite}.png",
+            list(g.index), list(g.values), os.path.join(fig_dir, f"fig_cf_ratio_{args.suite}.png"),
             ylabel="R_norm", title="Language attention ratio by instruction condition (H1)"))
         g2 = cf.groupby("condition")["KL_vs_valid"].mean().reindex(order)
         made.append(viz.plot_conditions(
-            list(g2.index), list(g2.values), f"outputs/fig_cf_kl_{args.suite}.png",
+            list(g2.index), list(g2.values), os.path.join(fig_dir, f"fig_cf_kl_{args.suite}.png"),
             ylabel="KL vs valid", title="Action distribution shift by instruction condition (H1)",
             color="#eb6834"))
 
@@ -71,5 +77,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    os.makedirs("outputs", exist_ok=True)
     sys.exit(main())

@@ -52,6 +52,7 @@ from vlamod import capture as cap  # noqa: E402
 from vlamod import env_libero as EL  # noqa: E402
 from vlamod import metrics as M  # noqa: E402
 from vlamod import pipeline as P  # noqa: E402
+from vlamod import paths as OP  # noqa: E402
 from vlamod import preprocess as PP  # noqa: E402
 from vlamod import token_index as TI  # noqa: E402
 from vlamod.model_loader import load_openvla  # noqa: E402
@@ -182,9 +183,8 @@ def main() -> int:
     for tid in order:
         print(f"  [{tid}] ← 장면 [{partner[tid]}]")
 
-    ex_dir = "outputs/image_ablation_examples"
-    if not args.no_save_examples:
-        os.makedirs(ex_dir, exist_ok=True)
+    ex_dir = OP.out_dir(OP.IMAGE_ABLATION, args.tag, "examples",
+                        make=not args.no_save_examples)
 
     # ---------------- 2) 분석 패스 ----------------
     print("\n[2/2] 분석 — 조건별 캡처")
@@ -227,7 +227,7 @@ def main() -> int:
 
     df = pd.DataFrame(rows)
     stem = f"{args.suite}{'_' + args.tag if args.tag else ''}"
-    out = f"outputs/image_ablation_{stem}.csv"
+    out = OP.out_path(OP.IMAGE_ABLATION, f"image_ablation_{stem}.csv", tag=args.tag)
     df.to_csv(out, index=False)
     print(f"\n저장: {out}  ({len(df)} rows)")
     if not args.no_save_examples:
@@ -240,12 +240,12 @@ def main() -> int:
                                    "n_identical_dof"]].mean().reindex(conditions).round(4).to_string())
 
     # 04 결과가 있으면 지시문 개입과 나란히 보여줌
-    cf_path = f"outputs/counterfactual_{stem}.csv"
+    cf_path = OP.find_input(OP.COUNTERFACTUAL, f"counterfactual_{stem}.csv", tag=args.tag)
     if os.path.exists(cf_path):
         cf = pd.read_csv(cf_path)
         g = cf.groupby("condition")["KL_vs_valid"].mean()
         h = df.groupby("condition")["KL_vs_valid"].mean()
-        print("\n--- 지시문 개입(04) vs 이미지 개입(06): 평균 KL_vs_valid ---")
+        print(f"\n--- 지시문 개입(04) vs 이미지 개입(06): 평균 KL_vs_valid ---  (04: {cf_path})")
         for a, b in [("swapped", "other_scene"), ("empty", "noise"), ("paraphrase", "hflip")]:
             if a in g and b in h:
                 print(f"  지시문 {a:<10s} {g[a]:7.3f}   |   이미지 {b:<13s} {h[b]:7.3f}")
@@ -255,5 +255,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    os.makedirs("outputs", exist_ok=True)
     sys.exit(main())

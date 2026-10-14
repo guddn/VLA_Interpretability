@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from vlamod.device import apply_env, apply_overrides, report_gpu  # noqa: E402
 from vlamod import capture as cap  # noqa: E402
 from vlamod import metrics as M  # noqa: E402
+from vlamod import paths as OP  # noqa: E402
 from vlamod import token_index as TI  # noqa: E402
 from vlamod.model_loader import action_bin_token_ids, load_openvla  # noqa: E402
 
@@ -106,8 +107,9 @@ def main() -> int:
         # 'EGLError: EGL_NOT_INITIALIZED (eglDestroyContext)' 가 찍힙니다 (결과에는 무해).
         task.env.close()
         print(f"  instruction: {instruction!r}")
-        img_a.save("outputs/smoke_libero_view.png")
-        print("  → outputs/smoke_libero_view.png 를 열어서 **상하가 맞는지** 확인하세요.")
+        view_png = OP.out_path(OP.SMOKE, "smoke_libero_view.png")
+        img_a.save(view_png)
+        print(f"  → {view_png} 를 열어서 **상하가 맞는지** 확인하세요.")
     else:
         img_a, img_b = synth_image(0), synth_image(1)
 
@@ -187,16 +189,16 @@ def main() -> int:
     print(f"  sink 질량 평균   = {r.mass_sink.mean():.4f}   ← 크면 attention sink 가 지배 중")
     print(f"  기타 질량 평균   = {r.mass_other.mean():.4f}")
 
+    cap_pt = OP.out_path(OP.SMOKE, "smoke_capture.pt")
     torch.save(
         {"spans": spans.__dict__, "ratios": {k: v for k, v in r.__dict__.items()}},
-        "outputs/smoke_capture.pt",
+        cap_pt,
     )
-    print("\n저장: outputs/smoke_capture.pt")
+    print(f"\n저장: {cap_pt}")
     print("=" * 70)
     print("전부 통과했으면 scripts/02_run_analysis.py 로 넘어가세요.")
     return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    os.makedirs("outputs", exist_ok=True)
     sys.exit(main())

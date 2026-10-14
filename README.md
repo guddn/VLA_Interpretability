@@ -58,7 +58,7 @@ python scripts/01_smoke_forward.py --gpu 5 --libero --suite spatial --task-id 0
 
 python scripts/08_policy_sanity.py --gpu 5 --tasks 0 --gripper-fix both   # ★ 성공 1회 먼저 확인
 python scripts/02_run_analysis.py  --gpu 5 --suite spatial --tasks 0 1 2 --episodes 3
-python scripts/03_correlation.py   --csv outputs/analysis_spatial.csv    # GPU 불필요
+python scripts/03_correlation.py                                       # GPU 불필요 (02 출력 자동 탐색)
 python scripts/04_counterfactual.py --gpu 5 --suite spatial --tasks 0 1 2 3   # 05_plots 와 suite 맞추기
 python scripts/06_image_ablation.py --gpu 5 --suite spatial --tasks 0 1 2 3 4   # 04 와 같은 GPU 권장
 python scripts/05_plots.py         --suite spatial                      # GPU 불필요
@@ -260,18 +260,27 @@ scripts/
   06_image_ablation.py  L0         이미지 조건 5종 비교 (04 의 이미지판)
   07_dump_model_input.py           모델이 실제로 받은 이미지(pixel_values) PNG 로 복원
   08_policy_sanity.py   ★ 선행    정책 성공 확인. 이미지 전처리 × 그리퍼 변환 전/후 비교
-tests/test_core.py      GPU 없이 도는 단위 테스트 70개
+tests/test_core.py      GPU 없이 도는 단위 테스트 73개
 ```
 
 ### 산출물
 
 ```
-02 ─▶ outputs/analysis_<suite>.csv       타임스텝별 tidy row
-   ─▶ outputs/perlayer_<suite>.npz       층별 배열
-04 ─▶ outputs/counterfactual_<suite>.csv
-03 ─▶ outputs/correlation.csv
-05 ─▶ outputs/fig_*.png
+outputs/
+  01_smoke_forward/      smoke_libero_view.png, smoke_capture.pt
+  02_run_analysis/       analysis_<suite>.csv (타임스텝별 tidy row), perlayer_<suite>.npz (층별 배열)
+    <tag>/               --tag 를 준 실행은 하위 폴더 (파일명에도 tag 유지)
+  03_correlation/        correlation.csv
+  04_counterfactual/     counterfactual_<suite>.csv
+  05_plots/              fig_*_<suite>.png
+  06_image_ablation/     image_ablation_<suite>.csv, examples/
+  07_dump_model_input/   input_*.png
+  setup_04_verify/       verify_render.png
+  setup_05_diag_render/  diag_render.png
 ```
+
+경로 규약은 `vlamod/paths.py` 한 곳에 있습니다. 03·05·06 은 다른 스크립트의 출력을 새 위치에서 먼저 찾고,
+없으면 정리 전의 `outputs/<파일명>` 을 경고와 함께 읽습니다.
 
 ---
 

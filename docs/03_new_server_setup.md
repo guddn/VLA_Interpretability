@@ -241,12 +241,12 @@ python setup/04_verify.py --gpus 0,6
   [ OK ] opencv < 5: 4.14.0
   [ OK ] transformers 4.40.x: 4.40.1
   [ OK ] libero 패키지: /home/…/LIBERO/libero
-  [ OK ] EGL 실제 렌더링 (★ 진짜 검사): 256x256, std=48.3 → outputs/verify_render.png
+  [ OK ] EGL 실제 렌더링 (★ 진짜 검사): 256x256, std=48.3 → outputs/setup_04_verify/verify_render.png
   [ OK ] HF 캐시 / 체크포인트: …/hub  여유 102GB  |  체크포인트 있음
 통과 10 / 10
 ```
 
-**`outputs/verify_render.png` 를 열어 로봇 팔이 똑바로 서 있는지 눈으로 확인하세요.**
+**`outputs/setup_04_verify/verify_render.png` 를 열어 로봇 팔이 똑바로 서 있는지 눈으로 확인하세요.**
 LIBERO 이미지는 상하가 뒤집혀 나오는데, 방향이 틀리면 vision attention 분석 전체가
 무의미해집니다. 뒤집혀 있으면 `vlamod/env_libero.py` 의 `obs_to_image(flip=...)` 를 바꿉니다.
 

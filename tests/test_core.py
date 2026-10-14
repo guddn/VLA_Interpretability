@@ -594,3 +594,37 @@ def test_noise_image_deterministic():
     assert a.shape == (32, 32, 3)
     assert np.array_equal(a, np.asarray(PP.noise_image((32, 32), seed=1)))
     assert not np.array_equal(a, np.asarray(PP.noise_image((32, 32), seed=2)))
+
+
+# ---------------------------------------------------------------- 출력 경로 규약
+from vlamod import paths as OP  # noqa: E402
+
+
+def test_out_path_numbered_folder(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    p = OP.out_path(OP.ANALYSIS, "analysis_spatial.csv")
+    assert p == os.path.join("outputs", "02_run_analysis", "analysis_spatial.csv")
+    assert os.path.isdir(os.path.dirname(p))                      # 폴더를 만들어 줌
+
+
+def test_out_path_tag_subfolder_and_no_make(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    p = OP.out_path(OP.ANALYSIS, "analysis_spatial_x.csv", tag="x", make=False)
+    assert p == os.path.join("outputs", "02_run_analysis", "x", "analysis_spatial_x.csv")
+    assert not os.path.exists(os.path.dirname(p))                 # make=False 면 안 만듦
+    d = OP.out_dir(OP.IMAGE_ABLATION, None, "examples")
+    assert d == os.path.join("outputs", "06_image_ablation", "examples") and os.path.isdir(d)
+
+
+def test_find_input_prefers_new_then_legacy(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    new = OP.out_path(OP.COUNTERFACTUAL, "counterfactual_spatial.csv", make=False)
+    assert OP.find_input(OP.COUNTERFACTUAL, "counterfactual_spatial.csv") == new  # 둘 다 없음
+    legacy = os.path.join("outputs", "counterfactual_spatial.csv")
+    os.makedirs("outputs")
+    open(legacy, "w").close()
+    assert OP.find_input(OP.COUNTERFACTUAL, "counterfactual_spatial.csv") == legacy
+    assert "옛 위치" in capsys.readouterr().out                    # 경고 출력
+    os.makedirs(os.path.dirname(new))
+    open(new, "w").close()
+    assert OP.find_input(OP.COUNTERFACTUAL, "counterfactual_spatial.csv") == new  # 새 위치 우선

@@ -11,7 +11,7 @@
 
 ## 0. 한눈에 — CSV 컬럼 사전
 
-`outputs/analysis_<suite>.csv` (한 행 = 한 타임스텝)
+`outputs/02_run_analysis/analysis_<suite>.csv` (한 행 = 한 타임스텝)
 
 | 컬럼 | 종류 | 한 줄 정의 | 범위 | 비교 기준 |
 |---|---|---|---|---|
@@ -39,7 +39,7 @@
 | `ep_len` | 에피소드 | 에피소드 실제 길이 (env 스텝) | — | — |
 | `suite`, `task_id`, `episode`, `t` | 메타 | 식별자. `t` 는 에피소드 안의 env 스텝 | — | — |
 
-`outputs/perlayer_<suite>.npz` — 층별 `R_raw`, `R_norm`, `R_vnorm` (헤드·query 평균, 행마다 길이 32 배열)
+`outputs/02_run_analysis/perlayer_<suite>.npz` — 층별 `R_raw`, `R_norm`, `R_vnorm` (헤드·query 평균, 행마다 길이 32 배열)
 
 ---
 
@@ -204,7 +204,7 @@ $$\#\{d : \arg\max_b p_d(b) \ne \arg\max_b q_d(b)\}$$
 
 ## 5. H1 지표 (`04_counterfactual.py`)
 
-`outputs/counterfactual_<suite>.csv` (한 행 = 스텝 × 지시 조건)
+`outputs/04_counterfactual/counterfactual_<suite>.csv` (한 행 = 스텝 × 지시 조건)
 
 | 컬럼 | 정의 |
 |---|---|
@@ -220,7 +220,7 @@ $$\#\{d : \arg\max_b p_d(b) \ne \arg\max_b q_d(b)\}$$
 
 ### 5-1. 이미지 개입 (`06_image_ablation.py`)
 
-`outputs/image_ablation_<suite>.csv` — 04 와 같은 지표·같은 규약, 지시문은 항상 원래 것.
+`outputs/06_image_ablation/image_ablation_<suite>.csv` — 04 와 같은 지표·같은 규약, 지시문은 항상 원래 것.
 
 | 컬럼 | 정의 |
 |---|---|

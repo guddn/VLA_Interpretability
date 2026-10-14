@@ -6,7 +6,9 @@
   - 상관 높음 → attention 지표를 정당화 (기존 연구를 방어해 주는 결과)
 
 사용:
-    python scripts/03_correlation.py --csv outputs/analysis_spatial.csv
+    python scripts/03_correlation.py                       # 02 의 기본 출력을 읽음
+    python scripts/03_correlation.py --csv outputs/02_run_analysis/chk_gpu0/analysis_spatial_chk_gpu0.csv \
+                                     --out outputs/03_correlation/correlation_chk_gpu0.csv
 """
 
 from __future__ import annotations
@@ -20,6 +22,8 @@ import pandas as pd
 from scipy import stats
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from vlamod import paths as OP  # noqa: E402
 
 
 def report(x: np.ndarray, y: np.ndarray, xname: str, yname: str) -> dict:
@@ -38,9 +42,18 @@ def report(x: np.ndarray, y: np.ndarray, xname: str, yname: str) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", default="outputs/analysis_spatial.csv")
-    ap.add_argument("--out", default="outputs/correlation.csv")
+    ap.add_argument("--csv", default=None,
+                    help="기본: outputs/02_run_analysis/analysis_spatial.csv")
+    ap.add_argument("--out", default=None,
+                    help="기본: outputs/03_correlation/correlation.csv")
     args = ap.parse_args()
+    if args.csv is None:
+        args.csv = OP.find_input(OP.ANALYSIS, "analysis_spatial.csv")
+    if args.out is None:
+        args.out = OP.out_path(OP.CORRELATION, "correlation.csv")
+    else:
+        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    print(f"입력: {args.csv}")
 
     df = pd.read_csv(args.csv)
     need = {"R_raw", "R_norm", "R_vnorm", "KL_lang_knockout", "KL_vis_knockout"}
@@ -63,6 +76,7 @@ def main() -> int:
 
     out = pd.DataFrame(results)
     out.to_csv(args.out, index=False)
+    print(f"저장: {args.out}")
     print(out.to_string(index=False))
 
     print("\n--- 해석 가이드 ---")
@@ -82,5 +96,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    os.makedirs("outputs", exist_ok=True)
     sys.exit(main())

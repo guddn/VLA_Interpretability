@@ -45,6 +45,7 @@ from vlamod import capture as cap  # noqa: E402
 from vlamod import env_libero as EL  # noqa: E402
 from vlamod import metrics as M  # noqa: E402
 from vlamod import pipeline as P  # noqa: E402
+from vlamod import paths as OP  # noqa: E402
 from vlamod import token_index as TI  # noqa: E402
 from vlamod.model_loader import load_openvla  # noqa: E402
 
@@ -226,7 +227,7 @@ def main() -> int:
 
     df = pd.DataFrame(rows)
     stem = f"{args.suite}{'_' + args.tag if args.tag else ''}"
-    out = f"outputs/counterfactual_{stem}.csv"
+    out = OP.out_path(OP.COUNTERFACTUAL, f"counterfactual_{stem}.csv", tag=args.tag)
     df.to_csv(out, index=False)
     print(f"\n저장: {out}  ({len(df)} rows)")
     print(f"teacher-forcing prefix 규약: {args.prefix_mode}"
@@ -261,6 +262,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    os.makedirs("outputs", exist_ok=True)
     _ = itertools
     sys.exit(main())

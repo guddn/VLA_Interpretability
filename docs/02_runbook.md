@@ -31,12 +31,21 @@ Stage 6   scripts/05_plots        ← 그림 4장
 산출물 흐름:
 
 ```
-02 ─▶ outputs/analysis_<suite>.csv     (타임스텝별 tidy row)
-   ─▶ outputs/perlayer_<suite>.npz     (층별 배열)
-04 ─▶ outputs/counterfactual_<suite>.csv
-03 ─▶ outputs/correlation.csv
-05 ─▶ outputs/fig_*.png
+outputs/
+  01_smoke_forward/      smoke_libero_view.png, smoke_capture.pt
+  02_run_analysis/       analysis_<suite>.csv (타임스텝별 tidy row), perlayer_<suite>.npz (층별 배열)
+    <tag>/               --tag 를 준 실행은 하위 폴더 (파일명에도 tag 유지)
+  03_correlation/        correlation.csv
+  04_counterfactual/     counterfactual_<suite>.csv
+  05_plots/              fig_*_<suite>.png
+  06_image_ablation/     image_ablation_<suite>.csv, examples/
+  07_dump_model_input/   input_*.png
+  setup_04_verify/       verify_render.png
+  setup_05_diag_render/  diag_render.png
 ```
+
+경로 규약은 `vlamod/paths.py` 한 곳에 있습니다. 03·05·06 은 다른 스크립트의 출력을 새 위치에서 먼저 찾고,
+없으면 정리 전의 `outputs/<파일명>` 을 경고와 함께 읽습니다.
 
 ---
 
@@ -179,7 +188,7 @@ python scripts/01_smoke_forward.py --gpu 0 --libero --suite spatial --task-id 0
 1. `[5] 범위 검증: 통과`
 2. `[6] attention 행 합`이 1.0000
 3. `[4]` 육안 검증 통과 — **이건 자동화 불가, 직접 보셔야 합니다**
-4. `--libero` 실행 시 `outputs/smoke_libero_view.png` 를 열어 **로봇 팔이 똑바로 서 있는지** 확인
+4. `--libero` 실행 시 `outputs/01_smoke_forward/smoke_libero_view.png` 를 열어 **로봇 팔이 똑바로 서 있는지** 확인
    (뒤집혀 있으면 `env_libero.obs_to_image(flip=False)` 로 바꾸고 다시)
 
 ### `[4]` 육안 검증 예시
@@ -227,7 +236,8 @@ python scripts/02_run_analysis.py --gpu 1 --suite object \
        --model openvla/openvla-7b-finetuned-libero-object \
        --unnorm-key libero_object --tag object_ckpt &
 wait
-# → outputs/analysis_spatial_spatial_ckpt.csv, outputs/analysis_object_object_ckpt.csv
+# → outputs/02_run_analysis/spatial_ckpt/analysis_spatial_spatial_ckpt.csv
+#   outputs/02_run_analysis/object_ckpt/analysis_object_object_ckpt.csv
 ```
 
 ### 파라미터가 무엇을 정하는가
@@ -266,7 +276,7 @@ A6000 bf16 + **eager attention**(flash 보다 느림) 기준 대략 **2~4초/스
 ## Stage 4 — H2 검정 (1분)
 
 ```bash
-python scripts/03_correlation.py --csv outputs/analysis_spatial.csv   # GPU 불필요
+python scripts/03_correlation.py   # GPU 불필요. 기본 입력 outputs/02_run_analysis/analysis_spatial.csv
 ```
 
 **질문**: attention 비율이 인과 기여를 예측하는가?
@@ -295,7 +305,7 @@ python scripts/03_correlation.py --csv outputs/analysis_spatial.csv   # GPU 불�
 ```bash
 # 각 task 의 지시문과 첫 프레임을 뽑아 눈으로 확인
 python scripts/01_smoke_forward.py --gpu 0 --libero --suite object --task-id 0
-# outputs/smoke_libero_view.png 를 열어본다. task-id 를 바꿔가며 반복
+# outputs/01_smoke_forward/smoke_libero_view.png 를 열어본다. task-id 를 바꿔가며 반복
 ```
 
 **고르는 기준**: 지시문이 지목하는 물체와 **혼동될 수 있는 후보가 장면에 둘 이상** 있을 것.
