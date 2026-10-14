@@ -7,7 +7,8 @@
 B단계(11, 예정)는 여기서 저장한 행동 시퀀스를 **시뮬레이터에서 재생**해 프레임을 복원한 뒤 분석합니다
 (MuJoCo 는 같은 초기 상태 + 같은 행동이면 같은 궤적 → GPU 와 무관하게 프레임 재현).
 
-변형: normal / V1 / V2 / V3 / V4 / V5 / R  (정의는 vlamod/icbench.py)
+변형: normal / V1 / V2 / V3 / V4 / V5 / R + 2×2 보완 A_seen / T_seen / L_unseen  (정의는 vlamod/icbench.py)
+      2×2 = 슬롯(학습 중 고정 vs 변함) × 단어(spatial 학습 지시문에 있었음 vs 없었음)
 채점: 전부 **원래 bddl 성공 판정** (On bowl_1 plate_1). 그 외에 방해 그릇이 접시에 올라갔는지,
       각 그릇을 들어 올렸는지(높이 +3cm)를 따로 기록해 결과를 target / distractor / wrong_lift / abstain 으로 나눕니다.
 
@@ -18,6 +19,10 @@ B단계(11, 예정)는 여기서 저장한 행동 시퀀스를 **시뮬레이터
     python scripts/10_icbench_rollout.py --dry-run                       # 지시문 표만 출력 (모델 안 올림)
     python scripts/10_icbench_rollout.py --gpu 4 --tasks 0 --inits 10    # 파일럿
     python scripts/10_icbench_rollout.py --gpu 4 --tasks 0 1 2 3 4 --inits 20
+    python scripts/10_icbench_rollout.py --dry-run --tasks 0 --show-tokens       # 바뀐 단어의 토큰 분할 확인 (tokenizer 만 로드)
+    python scripts/10_icbench_rollout.py --gpu 4 --tasks 0 --inits 10 --variants normal A_seen T_seen L_unseen --tag word2x2
+    python scripts/10_icbench_rollout.py --summarize outputs/10_icbench_rollout/rollouts_spatial.csv \
+                                         outputs/10_icbench_rollout/word2x2/rollouts_spatial_word2x2.csv   # 두 실행을 합쳐 2×2 표
 
 출력: outputs/10_icbench_rollout/
   variants_<suite>.csv   task × 변형 지시문 표 (검토용)
@@ -55,12 +60,13 @@ def variants_table(tasks) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def rollout(vla, task, init, instruction, unnorm_key, max_steps, P, EL):
+def rollout(vla, task, init, instruction, unnorm_key, max_steps, P, EL, alt_obj=None):
+    """alt_obj: T_seen 의 대체 목표 bddl 객체 이름 — 주면 목표 그릇이 그 위에 놓였는지도 판정."""
     EL.reset_to(task, init)
     obs = EL.step_noop(task, 10)
     z0 = np.array([IC.object_pos(task, IC.TARGET)[2], IC.object_pos(task, IC.DISTRACTOR)[2]])
     acts, eef, bz = [], [], []
-    done, dis_on = False, False
+    done, dis_on, alt_on = False, False, False
     for t in range(max_steps):
         a = P.policy_action(vla, EL.obs_to_image(obs), instruction, unnorm_key)
         acts.append(np.asarray(a, dtype=np.float32))
@@ -72,15 +78,20 @@ def rollout(vla, task, init, instruction, unnorm_key, max_steps, P, EL):
         if t % 10 == 9 and IC.on_plate(task, IC.DISTRACTOR):   # 방해 그릇을 올렸으면 더 볼 필요 없음
             dis_on = True
             break
+        if alt_obj and t % 10 == 9 and IC.on_object(task, IC.TARGET, alt_obj):   # 대체 목표에 놓음
+            alt_on = True
+            break
     try:
         success = bool(task.env.check_success())
     except Exception:  # noqa: BLE001
         success = bool(done)
     dis_on = dis_on or IC.on_plate(task, IC.DISTRACTOR)
+    if alt_obj:
+        alt_on = alt_on or IC.on_object(task, IC.TARGET, alt_obj)
     bz = np.asarray(bz, dtype=np.float32)
     rise = (bz - z0[None, :]).max(axis=0) if len(bz) else np.zeros(2)
     return {
-        "success": success, "distractor_on_plate": dis_on,
+        "success": success, "distractor_on_plate": dis_on, "target_on_alt": bool(alt_on),
         "lifted_target": bool(rise[0] > LIFT_M), "lifted_distractor": bool(rise[1] > LIFT_M),
         "n_steps": len(acts),
     }, np.stack(acts), np.stack(eef), bz
@@ -91,7 +102,7 @@ def summarize(df: pd.DataFrame) -> None:
     sr = df.groupby("variant")["success"].mean().reindex(IC.VARIANTS).dropna()
     for v, s in sr.items():
         lgs = "" if v == "normal" else f"   LGS {100 * (sr['normal'] - s):+5.1f}"
-        print(f"  {v:7s} SR {100 * s:5.1f}%{lgs}")
+        print(f"  {v:9s} SR {100 * s:5.1f}%{lgs}")
 
     ok = df[(df.variant == "normal") & df.success][["task_id", "init"]]
     sub = df.merge(ok, on=["task_id", "init"])
@@ -107,6 +118,60 @@ def summarize(df: pd.DataFrame) -> None:
         r = sub[sub.variant == "R"]
         if len(r):
             print(f"  R(방해 그릇을 가리키는 정상 명령)에서 지시를 따름(distractor): {(r.outcome == 'distractor').mean():.1%}")
+        ts = sub[sub.variant == "T_seen"]
+        if len(ts):
+            print(f"  T_seen(대체 목표를 가리키는 실행 가능한 명령)에서 지시를 따름(alt_target): {(ts.outcome == 'alt_target').mean():.1%}")
+
+        cells = sub[sub.variant.isin(IC.VARIANT_CELLS)].copy()
+        if len(cells):
+            cells["슬롯"] = cells.variant.map(lambda v: IC.VARIANT_CELLS[v][0])
+            cells["단어"] = cells.variant.map(lambda v: IC.VARIANT_CELLS[v][1])
+            cells["무시"] = cells.outcome == "target"
+            print("\n--- 2×2: 가짜 성공(=바뀐 단어를 무시) 비율 [변형별 n] ---")
+            print("  예측 — 낯선 단어 가설: '못 본 단어' 열만 높음 / 고정 슬롯 가설: '고정' 행만 높음")
+            piv = cells.pivot_table(index="슬롯", columns="단어", values="무시", aggfunc="mean")
+            print(piv.round(2).to_string())
+            for (slot, word), g in cells.groupby(["슬롯", "단어"]):
+                per = ", ".join(f"{v} {gg['무시'].sum()}/{len(gg)}" for v, gg in g.groupby("variant"))
+                print(f"  {slot} × {word}: {per}")
+
+
+def summarize_files(paths) -> int:
+    """여러 실행의 CSV 를 합쳐 요약. 같은 (task, init) 의 normal 결과가 파일마다 다르면 경고 (GPU·코드가 달랐다는 신호)."""
+    dfs = [pd.read_csv(p) for p in paths]
+    norm = [d[d.variant == "normal"].set_index(["task_id", "init"])["outcome"] for d in dfs]
+    for p, n in zip(paths[1:], norm[1:]):
+        common = norm[0].index.intersection(n.index)
+        diff = int((norm[0].loc[common] != n.loc[common]).sum())
+        gpus = set(dfs[0].get("gpu", pd.Series(dtype=str)).dropna()) | set(pd.read_csv(p).get("gpu", pd.Series(dtype=str)).dropna())
+        print(f"[재현성] {p}: normal 결과가 첫 파일과 다른 초기 상태 {diff}/{len(common)}  (GPU: {', '.join(sorted(gpus))})")
+        if diff:
+            print("  !! normal 이 달라졌습니다. 같은 GPU 종류·같은 코드로 돌렸는지 확인하세요. 비교는 첫 파일의 normal 기준으로 합니다.")
+    df = pd.concat(dfs, ignore_index=True).drop_duplicates(["task_id", "init", "variant"], keep="first")
+    summarize(df)
+    return 0
+
+
+def show_tokens(args, vt: pd.DataFrame) -> None:
+    """바뀐 단어의 토큰 분할과 지시문 토큰 수. 여러 토큰으로 쪼개지면 11 의 위치별 비교가 어려워짐."""
+    try:
+        import yaml
+        from vlamod.device import apply_env
+        cfg = yaml.safe_load(open(args.config, encoding="utf-8"))
+        apply_env(cfg, args)
+        from transformers import AutoTokenizer
+        path = args.model or cfg["model"]["path"]
+        tok = AutoTokenizer.from_pretrained(path)
+    except Exception as e:  # noqa: BLE001
+        print(f"\n!! tokenizer 를 불러오지 못했습니다 ({e}). --show-tokens 는 서버에서 실행하세요.")
+        return
+    print("\n--- 토큰 분할 (지시문 토큰 수 / 바뀐 단어 → 토큰) ---")
+    for _, r in vt.iterrows():
+        n = len(tok(r.instruction, add_special_tokens=False)["input_ids"])
+        pieces = "  ".join(f"{w}→{tok.tokenize(' ' + w)}" for w in str(r.changed).split()) if r.changed else ""
+        unseen = [w for w in str(r.changed).split() if w not in IC.SPATIAL_VOCAB]
+        mark = f"  [spatial 학습에 없던 단어: {', '.join(unseen)}]" if unseen else ""
+        print(f"  task {r.task_id} {r.variant:9s} {n:2d} 토큰  {pieces}{mark}")
 
 
 def main() -> int:
@@ -119,6 +184,10 @@ def main() -> int:
     ap.add_argument("--variants", nargs="+", default=IC.VARIANTS, choices=IC.VARIANTS)
     ap.add_argument("--max-steps", type=int, default=220)
     ap.add_argument("--dry-run", action="store_true", help="지시문 표만 저장·출력하고 종료")
+    ap.add_argument("--summarize", nargs="+", default=None, metavar="CSV",
+                    help="롤아웃 없이 기존 rollouts CSV 들을 합쳐 요약·2×2 표만 출력 (normal 은 첫 파일 것을 사용)")
+    ap.add_argument("--show-tokens", action="store_true",
+                    help="--dry-run 과 함께: 바뀐 단어가 몇 개 토큰으로 쪼개지는지 출력 (tokenizer 만 로드)")
     ap.add_argument("--hf-home", default=None)
     ap.add_argument("--gpu", type=int, default=None, metavar="N")
     ap.add_argument("--headroom-gb", type=float, default=None, metavar="G")
@@ -131,6 +200,9 @@ def main() -> int:
     ap.add_argument("--tag", default=None)
     args = ap.parse_args()
 
+    if args.summarize:
+        return summarize_files(args.summarize)
+
     variants = ["normal"] + [v for v in args.variants if v != "normal"]   # t_star 계산에 normal 필수
     stem = f"{args.suite}{'_' + args.tag if args.tag else ''}"
     out_dir = OP.out_dir(OP.ICBENCH_ROLLOUT, args.tag)
@@ -142,7 +214,9 @@ def main() -> int:
         print(f"[task {tid}]")
         for _, r in g.iterrows():
             if r.variant in variants:
-                print(f"  {r.variant:7s} {r.instruction}")
+                print(f"  {r.variant:9s} {r.instruction}")
+    if args.dry_run and args.show_tokens:
+        show_tokens(args, vt[vt.variant.isin(variants)])
     if args.dry_run:
         print(f"\n저장: {os.path.join(out_dir, f'variants_{stem}.csv')}  (--dry-run: 롤아웃 안 함)")
         return 0
@@ -176,14 +250,20 @@ def main() -> int:
         for init in range(args.init_offset, args.init_offset + args.inits):
             eef_normal = None
             for v in variants:
+                if v not in vs:
+                    if init == args.init_offset:
+                        print(f"  task {tid}: {v} 는 이 장면에서 만들 수 없어 건너뜀 (대체 목표 없음)")
+                    continue
+                alt = IC.alt_target(tid) if v == "T_seen" else None
                 res, acts, eef, bz = rollout(vla, task, init, vs[v], mcfg["unnorm_key"],
-                                             args.max_steps, P, EL)
+                                             args.max_steps, P, EL, alt_obj=alt[1] if alt else None)
                 key = f"{tid}_{init}_{v}"
                 traj[f"{key}__actions"], traj[f"{key}__eef"], traj[f"{key}__bowl_z"] = acts, eef, bz
                 if v == "normal":
                     eef_normal = eef
                 outcome = IC.classify(res["success"], res["distractor_on_plate"],
-                                      res["lifted_target"], res["lifted_distractor"])
+                                      res["lifted_target"], res["lifted_distractor"],
+                                      target_on_alt=res["target_on_alt"])
                 rows.append({
                     "suite": args.suite, "task_id": tid, "init": init, "variant": v,
                     "instruction": vs[v], "changed": " ".join(IC.changed_words(vs["normal"], vs[v])),
@@ -191,7 +271,7 @@ def main() -> int:
                     "t_star": -1 if v == "normal" else IC.first_divergence(eef_normal, eef, DIVERGE_M),
                     "gpu": gpu_name,
                 })
-                print(f"  task {tid} init {init:2d} {v:7s} → {outcome:10s} ({res['n_steps']:3d} steps)"
+                print(f"  task {tid} init {init:2d} {v:9s} → {outcome:10s} ({res['n_steps']:3d} steps)"
                       + ("" if v == "normal" else f"  t*={rows[-1]['t_star']}"))
         task.env.close()
         # task 하나 끝날 때마다 저장 (중간에 죽어도 그때까지는 남음)
