@@ -54,7 +54,7 @@ pip install torch pytest numpy pandas pillow pyyaml
 pytest -q tests/test_core.py
 ```
 
-**Gate**: `93 passed`. 지표 계산식, 질량 합 = 1, KL 성질, knockout 재정규화, 프롬프트 오프셋, 29871·Q 행, device 인자,
+**Gate**: `95 passed`. 지표 계산식, 질량 합 = 1, KL 성질, knockout 재정규화, 프롬프트 오프셋, 29871·Q 행, device 인자,
 이미지 변형, 경로 규약, 치환 hook·정렬 검사, ICBench 변형 규칙이 검증됩니다. 실패하면 서버에 갈 필요가 없습니다.
 
 ---
@@ -288,6 +288,18 @@ python scripts/10_icbench_rollout.py --gpu 4 --tasks 0 1 2 3 4 7 9 --inits 20   
 - task 하나 끝날 때마다 CSV·npz 저장 (중간에 죽어도 남음).
 - **Gate**: 정상 지시로 성공한 초기 상태에서 **실제 실패(target 이외)가 10개 이상** — 미달이면 11 의 예측 비교는 표본 부족 경고가 뜹니다.
 - 볼 것: R 에서 `distractor`(지시를 따름) 비율. **task 7·9 에서 따르는지**가 원인 판별(데이터 지름길 vs 구조)의 첫 데이터.
+
+**2×2 보완 (낯선 단어 vs 고정 슬롯)**
+
+```bash
+python scripts/10_icbench_rollout.py --dry-run --tasks 0 --show-tokens --tag word2x2      # 바뀐 단어 토큰 분할 확인
+python scripts/10_icbench_rollout.py --gpu 4 --tasks 0 --inits 10 --variants normal A_seen T_seen L_unseen --tag word2x2
+python scripts/10_icbench_rollout.py --summarize outputs/10_icbench_rollout/rollouts_spatial.csv \
+                                     outputs/10_icbench_rollout/word2x2/rollouts_spatial_word2x2.csv
+```
+
+- 기존 파일럿과 **같은 GPU 종류**로 돌려야 normal 결과가 같아집니다. `--summarize` 가 `[재현성]` 줄로 확인해 줍니다 (다르면 경고).
+- `T_seen` 은 대체 목표가 없는 task(1, 5)에서는 자동으로 건너뜁니다.
 
 ## 11 — (예정) 가짜 성공 예측
 

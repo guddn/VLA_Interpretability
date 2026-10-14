@@ -159,6 +159,21 @@ pixel_values ──▶ DINOv2+SigLIP ──▶ projector ──┐
 
 !! 실제 실패가 거의 안 나오면(OFT 는 spatial 에서 SR 92–98%) 예측 비교는 표본 부족 → 파일럿으로 먼저 확인.
 
+**task 0 파일럿 결과와 2×2 보완 (2026-10-14).** V1–V4 는 가짜 성공 8–9/9(무시), V5 0/9·R 2/9(위치구는 따름).
+그런데 무시된 단어(blue, green, under)는 모두 **spatial 학습 지시문에 없던 단어**, 따른 단어(stove, ramekin)는 **있던 단어**라
+"낯선 단어라서 무시"와 "학습 중 고정된 슬롯이라서 무시"가 완전히 겹침 → 같은 슬롯에 반대쪽 단어를 넣은 조건을 추가:
+
+| 슬롯 | spatial 학습에 있던 단어 | 없던 단어 |
+|---|---|---|
+| 고정 — 그릇 수식어 | `A_seen` wooden bowl | `V1` blue bowl |
+| 고정 — 놓을 곳 | `T_seen` on the cookie box (**실행 가능**, `alt_target` 판정) | `V4` under / `V2` green plate |
+| 변하는 — 위치구 | `V5` on the stove, `R` | `L_unseen` next to the sink (LIBERO 전체 0회) |
+
+예측: 낯선 단어 가설이면 '없던 단어' 열만 무시, 고정 슬롯 가설이면 '고정' 행만 무시. 둘 다 일부 맞으면 칸마다 섞임 → 11 의 내부 분석이 판정.
+실행: `--variants normal A_seen T_seen L_unseen --tag word2x2`, 요약: `--summarize <기존 CSV> <word2x2 CSV>` (normal 재현성도 검사).
+⚠ "없던 단어"는 **spatial 미세조정 데이터 기준**(Llama·OXE 사전학습에는 있을 수 있음). wooden 은 'wooden cabinet' 문맥에서만 나옴.
+토큰 분할은 서버에서 `--dry-run --show-tokens` 로 확인.
+
 ---
 
 ## [L2] 토큰 임베딩 치환 — ✅ `scripts/09_embedding_substitution.py` (2026-10-14 추가)

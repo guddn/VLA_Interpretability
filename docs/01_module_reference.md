@@ -1,7 +1,7 @@
 # 모듈 레퍼런스 — 각 파일이 왜 있고 무엇을 하는가
 
 작성 2026-08-25 · **전면 개정 2026-10-14** (Q 행·29871 수정, 그리퍼 변환, 치환·ICBench·경로 모듈 반영)
-대상: `vlamod/` 13개 모듈 + `scripts/` 01–10 + `setup/` 01–08 + `tests/test_core.py`(93개)
+대상: `vlamod/` 13개 모듈 + `scripts/` 01–10 + `setup/` 01–08 + `tests/test_core.py`(95개)
 
 > 실험은 스크립트 번호로만 부릅니다. 연구 질문과 각 스크립트가 맡은 역할은 `docs/00_research_plan.md` §5.
 
@@ -274,7 +274,7 @@ OpenVLA 는 `[BOS | projector(패치) | 텍스트 임베딩]` 을 이어 Llama �
 | `05_diag_render.py` | 렌더링 실패 지점 단계별 특정 → `outputs/setup_05_diag_render/` |
 | `06_gpu_map.py` / `07_egl_probe.py` / `08_diag_robosuite.py` | GPU 번호 체계 대조 / EGL 디바이스·벤더 / robosuite↔mujoco 정합성 |
 
-## 16. `tests/test_core.py` — GPU 없이 도는 93개
+## 16. `tests/test_core.py` — GPU 없이 도는 95개
 
 | 그룹 | 검증 |
 |---|---|
